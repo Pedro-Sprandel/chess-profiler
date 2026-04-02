@@ -42,7 +42,7 @@
 
 ### Tasks
 
-- [ ] Task 2.1: Write tests for pgn_loader.py (Red Phase)
+- [x] Task 2.1: Write tests for pgn_loader.py (Red Phase) [eb90198]
   - Create `tests/test_pgn_loader.py`
   - Test `load_games_from_string()` with a minimal valid PGN — assert 1 game returned
   - Test `load_games_from_string()` with multiple games — assert correct count
