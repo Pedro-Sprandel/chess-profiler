@@ -1,0 +1,74 @@
+{
+  "concepts": [
+    {
+      "id": "weak_square",
+      "name": "Casa Fraca",
+      "silman_chapter": 3,
+      "silman_page": 67,
+      "silman_category": "desequilíbrios estáticos",
+      "description": "Casa que não pode ser defendida por peões e pode ser ocupada por peças adversárias.",
+      "strategic_implications": "Permite infiltração de cavalos e bispos adversários em posições fixas.",
+      "detection_key": "weak_square"
+    },
+    {
+      "id": "open_file",
+      "name": "Coluna Aberta",
+      "silman_chapter": 4,
+      "silman_page": 89,
+      "silman_category": "desequilíbrios dinâmicos",
+      "description": "Coluna sem peões de nenhuma das cores, ideal para torres.",
+      "strategic_implications": "Quem controla colunas abertas controla o espaço e penetração.",
+      "detection_key": "open_file"
+    },
+    {
+      "id": "isolated_pawn",
+      "name": "Peão Isolado",
+      "silman_chapter": 5,
+      "silman_page": 112,
+      "silman_category": "estrutura de peões",
+      "description": "Peão sem peões aliados nas colunas adjacentes.",
+      "strategic_implications": "Fraqueza permanente que requer defesa passiva. Adversário pressiona essa fraqueza.",
+      "detection_key": "isolated_pawn"
+    },
+    {
+      "id": "bishop_pair",
+      "name": "Par de Bispos",
+      "silman_chapter": 6,
+      "silman_page": 134,
+      "silman_category": "desequilíbrios de material",
+      "description": "Possuir dois bispos enquanto o adversário tem cavalo(s) ou bispo único.",
+      "strategic_implications": "Vantagem em posições abertas. Devem ser ativados abrindo o jogo.",
+      "detection_key": "bishop_pair"
+    },
+    {
+      "id": "knight_outpost",
+      "name": "Cavalo em Posto Avançado",
+      "silman_chapter": 3,
+      "silman_page": 71,
+      "silman_category": "desequilíbrios estáticos",
+      "description": "Cavalo em casa fraca no campo adversário, protegido por peão.",
+      "strategic_implications": "Cavalo fixo no centro ou campo adversário é uma vantagem posicional duradoura.",
+      "detection_key": "knight_outpost"
+    },
+    {
+      "id": "king_safety",
+      "name": "Segurança do Rei",
+      "silman_chapter": 7,
+      "silman_page": 156,
+      "silman_category": "dinâmica",
+      "description": "Avaliação da exposição do rei baseada em cobertura de peões e atividade adversária.",
+      "strategic_implications": "Rei exposto prioriza ataque imediato. Desequilíbrio que supera fatores posicionais.",
+      "detection_key": "king_safety"
+    },
+    {
+      "id": "space_advantage",
+      "name": "Vantagem de Espaço",
+      "silman_chapter": 8,
+      "silman_page": 178,
+      "silman_category": "desequilíbrios estáticos",
+      "description": "Controle de mais casas no tabuleiro, especialmente no centro.",
+      "strategic_implications": "Mais espaço = mais opções de manobra e restrição das peças adversárias.",
+      "detection_key": "space_advantage"
+    }
+  ]
+}
