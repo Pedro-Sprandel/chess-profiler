@@ -28,7 +28,7 @@
   - Run tests and confirm they pass
   - Run `pytest --cov=. --cov-report=term` and verify coverage
 
-- [ ] Task 1.4: Create `data/silman_concepts.json`
+- [x] Task 1.4: Create `data/silman_concepts.json` [90a03fc]
   - Populate with all 7 concepts: `weak_square`, `open_file`, `isolated_pawn`,
     `bishop_pair`, `knight_outpost`, `king_safety`, `space_advantage`
   - Each entry must include: `id`, `name`, `silman_chapter`, `silman_page`,
