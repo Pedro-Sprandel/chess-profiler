@@ -65,7 +65,7 @@
 
 ### Tasks
 
-- [ ] Task 3.1: Write tests for position_analyzer.py (Red Phase)
+- [x] Task 3.1: Write tests for position_analyzer.py (Red Phase) [32902ac]
   - Create `tests/test_position_analyzer.py`
   - For each of the 7 detectors, create at least one test with a known FEN position
     where the concept IS present and one where it is NOT present
