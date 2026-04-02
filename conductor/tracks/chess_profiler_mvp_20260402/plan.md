@@ -98,7 +98,7 @@
   - Test `batch_validate()` calls `engine.quit()` exactly once
   - Run tests and confirm they fail
 
-- [ ] Task 4.2: Implement modules/stockfish_validator.py (Green Phase)
+- [x] Task 4.2: Implement modules/stockfish_validator.py (Green Phase) [649c8be]
   - Implement `validate_move()` and `batch_validate()` per spec
   - Ensure `engine.quit()` is in a `finally` block
   - Run tests and confirm they pass
