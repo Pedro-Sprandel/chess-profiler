@@ -112,7 +112,7 @@
 
 ### Tasks
 
-- [ ] Task 5.1: Write tests for profile_builder.py (Red Phase)
+- [x] Task 5.1: Write tests for profile_builder.py (Red Phase) [43b1b75]
   - Create `tests/test_profile_builder.py`
   - Test `build_profile()` with empty games list returns zeroed profile
   - Test `build_profile()` counts `total_positions_analyzed` correctly
