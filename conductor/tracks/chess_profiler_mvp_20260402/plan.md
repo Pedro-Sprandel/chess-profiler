@@ -9,7 +9,7 @@
 
 ### Tasks
 
-- [ ] Task 1.1: Create project directory structure
+- [x] Task 1.1: Create project directory structure [aa7125d]
   - Create `modules/`, `data/`, `output/`, `tests/` directories
   - Create `requirements.txt` with `chess`, `anthropic`, `python-dotenv`, `pytest`, `pytest-cov`
   - Create `.env.example` with `ANTHROPIC_API_KEY=your_key_here`
