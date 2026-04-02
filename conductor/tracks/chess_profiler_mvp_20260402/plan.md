@@ -82,7 +82,7 @@
 
 ---
 
-## Phase 4: Stockfish Validator Module
+## Phase 4: Stockfish Validator Module [checkpoint: 9406564]
 
 ### Tasks
 
