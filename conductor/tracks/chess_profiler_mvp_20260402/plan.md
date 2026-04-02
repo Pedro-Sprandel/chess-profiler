@@ -15,7 +15,7 @@
   - Create `.env.example` with `ANTHROPIC_API_KEY=your_key_here`
   - Create `.gitignore` ignoring `.env`, `output/`, `__pycache__/`, `.pytest_cache/`, `*.pyc`
 
-- [ ] Task 1.2: Write tests for config.py (Red Phase)
+- [x] Task 1.2: Write tests for config.py (Red Phase) [d954637]
   - Create `tests/test_config.py`
   - Test that `STOCKFISH_DEPTH` equals 15
   - Test that `ERROR_THRESHOLD_CP` equals 50
