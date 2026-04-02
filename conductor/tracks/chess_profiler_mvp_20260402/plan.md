@@ -52,7 +52,7 @@
   - Test `iterate_positions()` only yields positions for the specified player color
   - Run tests and confirm they fail
 
-- [ ] Task 2.2: Implement modules/pgn_loader.py (Green Phase)
+- [x] Task 2.2: Implement modules/pgn_loader.py (Green Phase) [48cc75f]
   - Implement `load_games_from_file()`, `load_games_from_string()`, `iterate_positions()`
   - Run tests and confirm they pass
   - Run coverage and verify >80%
