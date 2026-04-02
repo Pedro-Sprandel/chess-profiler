@@ -86,7 +86,7 @@
 
 ### Tasks
 
-- [ ] Task 4.1: Write tests for stockfish_validator.py (Red Phase)
+- [x] Task 4.1: Write tests for stockfish_validator.py (Red Phase) [2b5392a]
   - Create `tests/test_stockfish_validator.py`
   - Mock `chess.engine.SimpleEngine.popen_uci` to avoid requiring a real Stockfish binary
   - Test `validate_move()` returns dict with keys: `is_error`, `eval_before`,
