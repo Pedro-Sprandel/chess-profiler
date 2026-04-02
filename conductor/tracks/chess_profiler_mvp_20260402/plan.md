@@ -23,7 +23,7 @@
   - Test that `STOCKFISH_PATH` is a non-empty string
   - Run tests and confirm they fail
 
-- [ ] Task 1.3: Implement config.py (Green Phase)
+- [x] Task 1.3: Implement config.py (Green Phase) [7f9eb98]
   - Implement `config.py` per spec: load `.env`, define all constants
   - Run tests and confirm they pass
   - Run `pytest --cov=. --cov-report=term` and verify coverage
