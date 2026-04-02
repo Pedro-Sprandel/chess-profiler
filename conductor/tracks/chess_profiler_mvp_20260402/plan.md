@@ -5,7 +5,7 @@
 
 ---
 
-## Phase 1: Project Setup & Infrastructure
+## Phase 1: Project Setup & Infrastructure [checkpoint: d915632]
 
 ### Tasks
 
