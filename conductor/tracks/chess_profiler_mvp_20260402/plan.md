@@ -38,7 +38,7 @@
 
 ---
 
-## Phase 2: PGN Loader Module
+## Phase 2: PGN Loader Module [checkpoint: 0847d17]
 
 ### Tasks
 
