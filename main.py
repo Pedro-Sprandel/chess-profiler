@@ -1,3 +1,4 @@
+import argparse
 import chess
 import json
 import os
@@ -163,8 +164,19 @@ def analyze_player_from_username(username: str, n_months: int = 3):
 
 
 if __name__ == "__main__":
-    # Usar Chess.com API (recomendado)
-    analyze_player_from_username(username="sprandel", n_months=3)
+    parser = argparse.ArgumentParser(description="Chess Strategic Profiler")
+    parser.add_argument("--user", required=True, help="Chess.com username to analyze")
+    parser.add_argument("--months", type=int, default=3, help="Number of recent months to fetch (default: 3)")
+    parser.add_argument("--pgn", help="Path to a local PGN file (overrides --user)")
+    parser.add_argument("--color", choices=["white", "black"], default="white",
+                        help="Player color when using --pgn (default: white)")
+    args = parser.parse_args()
 
-    # Alternativa: usar arquivo PGN local
-    # analyze_player(pgn_path="partidas.pgn", player_name="sprandel", player_color=chess.WHITE)
+    if args.pgn:
+        analyze_player(
+            pgn_path=args.pgn,
+            player_name=args.user,
+            player_color=chess.WHITE if args.color == "white" else chess.BLACK
+        )
+    else:
+        analyze_player_from_username(username=args.user, n_months=args.months)
