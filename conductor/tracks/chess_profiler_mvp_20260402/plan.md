@@ -160,7 +160,7 @@
 
 ### Tasks
 
-- [ ] Task 7.1: Write integration tests for main.py (Red Phase)
+- [x] Task 7.1: Write integration tests for main.py (Red Phase) [68a7836]
   - Create `tests/test_main.py`
   - Mock `load_games_from_file`, `batch_validate`, and `diagnose` to avoid external deps
   - Test `analyze_player()` calls each pipeline stage in order
