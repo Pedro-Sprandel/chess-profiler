@@ -136,7 +136,7 @@
 
 ### Tasks
 
-- [ ] Task 6.1: Write tests for ai_diagnostician.py (Red Phase)
+- [x] Task 6.1: Write tests for ai_diagnostician.py (Red Phase) [d3bfaaf]
   - Create `tests/test_ai_diagnostician.py`
   - Mock the Anthropic client to avoid real API calls
   - Test `load_silman_concepts()` returns a dict keyed by `detection_key`
