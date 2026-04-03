@@ -169,7 +169,7 @@
   - Test `analyze_player()` returns `(profile, diagnosis)` tuple
   - Run tests and confirm they fail
 
-- [ ] Task 7.2: Implement main.py (Green Phase)
+- [x] Task 7.2: Implement main.py (Green Phase) [1652452]
   - Implement `analyze_player()` orchestrating all pipeline stages
   - Create `output/` directory on startup
   - Run tests and confirm they pass
