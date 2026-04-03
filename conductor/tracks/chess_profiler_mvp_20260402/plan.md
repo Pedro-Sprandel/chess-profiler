@@ -156,7 +156,7 @@
 
 ---
 
-## Phase 7: Main Pipeline & End-to-End Integration
+## Phase 7: Main Pipeline & End-to-End Integration [checkpoint: 7b07696]
 
 ### Tasks
 
