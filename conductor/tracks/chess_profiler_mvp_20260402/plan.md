@@ -147,7 +147,7 @@
   - Test `diagnose()` enriches `study_priority` items with Silman metadata
   - Run tests and confirm they fail
 
-- [ ] Task 6.2: Implement modules/ai_diagnostician.py (Green Phase)
+- [x] Task 6.2: Implement modules/ai_diagnostician.py (Green Phase) [3b4e5f6]
   - Implement `load_silman_concepts()` and `diagnose()` per spec
   - Run tests and confirm they pass
   - Run coverage and verify >80%
