@@ -3,7 +3,7 @@
 ## Overview
 
 Build a complete, end-to-end CLI pipeline that:
-1. Loads chess games from a PGN file
+1. Fetches recent games from Chess.com by username (or loads from a local PGN file)
 2. Detects strategic concepts in each position (deterministic rules)
 3. Validates each move with Stockfish to identify errors
 4. Aggregates results into a weakness profile
@@ -19,6 +19,17 @@ Build a complete, end-to-end CLI pipeline that:
 - The system MUST support loading games from a string (for testing).
 - The system MUST iterate over positions where it is the analyzed player's turn,
   yielding `(board_before, move_played, board_after)` tuples.
+
+### FR-01b: Chess.com API Loading
+- The system MUST fetch recent games from Chess.com using the public API (no auth required).
+- `fetch_archives(username)` fetches the list of monthly archive URLs from
+  `https://api.chess.com/pub/player/{username}/games/archives`.
+- `fetch_games_from_archive(archive_url)` fetches all games from a given archive URL.
+- `fetch_recent_games(username, n_months)` returns the `n_months` most recent archives,
+  returning a list of `(chess.pgn.Game, player_color)` tuples where `player_color` is
+  determined per-game by matching `username` against the `white.username` field.
+- The system MUST set a `User-Agent` header on all Chess.com API requests.
+- `n_months` defaults to 3.
 
 ### FR-02: Strategic Concept Detection
 The system MUST detect the following 7 concepts per position:

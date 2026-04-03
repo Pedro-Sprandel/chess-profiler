@@ -138,3 +138,47 @@ class TestAnalyzePlayer:
             analyze_player(str(pgn), "testplayer", chess.WHITE)
 
         mock_diag.assert_called_once()
+
+
+class TestAnalyzePlayerFromUsername:
+    def _run(self, username, output_dir):
+        mock_game = make_mock_game()
+        with patch("main.fetch_recent_games",
+                   return_value=[(mock_game, chess.WHITE)]) as mock_fetch, \
+             patch("main.batch_validate", return_value=[MOCK_VALIDATION] * 3), \
+             patch("main.diagnose", return_value=MOCK_DIAGNOSIS), \
+             patch("main.OUTPUT_DIR", output_dir):
+            from main import analyze_player_from_username
+            return analyze_player_from_username(username, n_months=2)
+
+    def test_returns_profile_and_diagnosis_tuple(self, tmp_path):
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+        profile, diagnosis = self._run("sprandel", output_dir)
+        assert isinstance(profile, dict)
+        assert isinstance(diagnosis, dict)
+
+    def test_writes_profile_json_to_output(self, tmp_path):
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+        self._run("sprandel", output_dir)
+        assert os.path.exists(os.path.join(output_dir, "sprandel_profile.json"))
+
+    def test_writes_diagnosis_json_to_output(self, tmp_path):
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+        self._run("sprandel", output_dir)
+        assert os.path.exists(os.path.join(output_dir, "sprandel_diagnosis.json"))
+
+    def test_calls_fetch_recent_games_with_correct_args(self, tmp_path):
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+        mock_game = make_mock_game()
+        with patch("main.fetch_recent_games",
+                   return_value=[(mock_game, chess.WHITE)]) as mock_fetch, \
+             patch("main.batch_validate", return_value=[MOCK_VALIDATION] * 3), \
+             patch("main.diagnose", return_value=MOCK_DIAGNOSIS), \
+             patch("main.OUTPUT_DIR", output_dir):
+            from main import analyze_player_from_username
+            analyze_player_from_username("sprandel", n_months=2)
+        mock_fetch.assert_called_once_with("sprandel", n_months=2)

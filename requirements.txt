@@ -1,5 +1,6 @@
 chess
 anthropic
 python-dotenv
+requests
 pytest
 pytest-cov
