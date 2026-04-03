@@ -123,7 +123,7 @@
   - Test `load_profile()` reads back the saved file correctly
   - Run tests and confirm they fail
 
-- [ ] Task 5.2: Implement modules/profile_builder.py (Green Phase)
+- [x] Task 5.2: Implement modules/profile_builder.py (Green Phase) [3ef1521]
   - Implement `build_profile()`, `save_profile()`, `load_profile()` per spec
   - Run tests and confirm they pass
   - Run coverage and verify >80%
