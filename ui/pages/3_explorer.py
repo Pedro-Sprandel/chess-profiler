@@ -57,15 +57,31 @@ for i, pos in enumerate(positions):
             continue
 
         board = chess.Board(fen)
-        svg = chess.svg.board(board, size=350)
+        move_played = pos.get("move_played")
+        best_move = pos.get("best_move")
+
+        arrows = []
+        if move_played:
+            m = chess.Move.from_uci(move_played)
+            arrows.append(chess.svg.Arrow(m.from_square, m.to_square, color="#cc0000"))
+        if best_move and best_move != move_played:
+            m = chess.Move.from_uci(best_move)
+            arrows.append(chess.svg.Arrow(m.from_square, m.to_square, color="#00aa00"))
+
+        svg = chess.svg.board(board, arrows=arrows, size=360)
 
         col_board, col_info = st.columns([1, 1])
         with col_board:
             components.html(
                 f'<div style="display:flex;justify-content:center">{svg}</div>',
-                height=380,
+                height=390,
             )
         with col_info:
-            st.markdown(f"**FEN:** `{fen}`")
-            st.markdown(f"**Error magnitude:** {pos.get('error_magnitude', '?')} centipawns")
             st.markdown(f"**Game:** {pos.get('game_id', '?')}")
+            st.markdown(f"**Error:** {pos.get('error_magnitude', '?')} centipawns")
+            if move_played:
+                st.markdown(f"🔴 **Move played:** `{move_played}`")
+            if best_move:
+                label = "✅ **Best move (same):**" if best_move == move_played else "🟢 **Best move:**"
+                st.markdown(f"{label} `{best_move}`")
+            st.markdown(f"**FEN:** `{fen}`")

@@ -39,6 +39,8 @@ def build_profile(games_data: list) -> dict:
                         concept_stats[concept_key]["positions"].append({
                             "game_id": game["game_id"],
                             "fen": position.get("fen"),
+                            "move_played": position.get("move_played"),
+                            "best_move": validation.get("best_move"),
                             "error_magnitude": validation["error_magnitude"]
                         })
             else:
