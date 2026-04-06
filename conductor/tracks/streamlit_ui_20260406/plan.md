@@ -6,9 +6,9 @@
   - [x] Sub-task: Write a test that imports `streamlit`, `plotly`, and `chess.svg` and asserts no `ImportError`
   - [x] Sub-task: Add `streamlit` and `plotly` to `requirements.txt` and run `pip install -r requirements.txt` (chessboard uses built-in `chess.svg`)
 
-- [ ] Task: Create `ui/` directory structure and `app.py` entry point
-  - [ ] Sub-task: Write a test using `streamlit.testing.v1.AppTest` that loads `app.py` and asserts the page title is present and no exceptions are raised
-  - [ ] Sub-task: Create `ui/__init__.py`, `ui/components/__init__.py`, `ui/pages/__init__.py`, empty placeholder files for all pages, and implement `app.py` with `st.set_page_config` and sidebar navigation
+- [x] Task: Create `ui/` directory structure and `app.py` entry point
+  - [x] Sub-task: Write a test using `streamlit.testing.v1.AppTest` that loads `app.py` and asserts the page title is present and no exceptions are raised
+  - [x] Sub-task: Create `ui/__init__.py`, `ui/components/__init__.py`, `ui/pages/__init__.py`, empty placeholder files for all pages, and implement `app.py` with `st.set_page_config` and sidebar navigation
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Setup & Scaffolding' (Protocol in workflow.md)
 
