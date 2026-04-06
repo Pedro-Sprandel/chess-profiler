@@ -26,9 +26,9 @@ sits on top of the existing `modules/` layer without modifying it.
 ### 3. Game Explorer (`ui/pages/3_explorer.py`)
 - Loads sample positions from the selected profile's weakness data
 - Weakness selector: dropdown of concepts that have sample positions
-- For each sample position: renders the FEN on an interactive board
-  using `streamlit-chessboard`, shows the move played vs. best move,
-  and displays error magnitude in centipawns
+- For each sample position: renders the FEN as an SVG board using
+  `chess.svg` displayed via `st.components.v1.html`, shows the move
+  played vs. best move, and displays error magnitude in centipawns
 
 ### 4. Diagnosis Report (`ui/pages/4_diagnosis.py`)
 - Profile selector: lists all `*_diagnosis.json` files in `output/`
@@ -42,7 +42,7 @@ sits on top of the existing `modules/` layer without modifying it.
 - FR2: Analysis progress is visible in real time via `st.progress` / `st.spinner`
 - FR3: User can browse and load any previously saved profile from `output/`
 - FR4: All charts are interactive (Plotly: hover tooltips, zoom)
-- FR5: Chessboard renders any FEN position from the player's sample errors
+- FR5: Chessboard renders any FEN position from the player's sample errors using `chess.svg` + `st.components.v1.html`
 - FR6: UI never modifies files in `modules/` — read-only integration
 
 ## Non-Functional Requirements
@@ -53,7 +53,7 @@ sits on top of the existing `modules/` layer without modifying it.
 ## New Dependencies
 - `streamlit`
 - `plotly`
-- `streamlit-chessboard`
+- (chessboard rendering uses `chess.svg` from the existing `chess` library — no extra package needed)
 
 ## File Structure
 ```

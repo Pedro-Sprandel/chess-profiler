@@ -2,9 +2,9 @@
 
 ## Phase 1: Setup & Scaffolding
 
-- [ ] Task: Add new dependencies to `requirements.txt`
-  - [ ] Sub-task: Write a test that imports `streamlit`, `plotly`, and `streamlit_chessboard` and asserts no `ImportError`
-  - [ ] Sub-task: Add `streamlit`, `plotly`, and `streamlit-chessboard` to `requirements.txt` and run `pip install -r requirements.txt`
+- [x] Task: Add new dependencies to `requirements.txt`
+  - [x] Sub-task: Write a test that imports `streamlit`, `plotly`, and `chess.svg` and asserts no `ImportError`
+  - [x] Sub-task: Add `streamlit` and `plotly` to `requirements.txt` and run `pip install -r requirements.txt` (chessboard uses built-in `chess.svg`)
 
 - [ ] Task: Create `ui/` directory structure and `app.py` entry point
   - [ ] Sub-task: Write a test using `streamlit.testing.v1.AppTest` that loads `app.py` and asserts the page title is present and no exceptions are raised
@@ -52,7 +52,7 @@
 
 - [ ] Task: Implement `ui/pages/3_explorer.py`
   - [ ] Sub-task: Write `AppTest` tests with a fixture profile JSON asserting the concept selector populates correctly and the position section renders without error for a given FEN
-  - [ ] Sub-task: Implement the page: profile selector, concept dropdown (only concepts with `sample_positions`), and for each sample position render the FEN via `streamlit-chessboard`, the move played, the best move, and error magnitude
+  - [ ] Sub-task: Implement the page: profile selector, concept dropdown (only concepts with `sample_positions`), and for each sample position render the FEN via `chess.svg` + `st.components.v1.html`, the move played, the best move, and error magnitude
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Game Explorer Page' (Protocol in workflow.md)
 
