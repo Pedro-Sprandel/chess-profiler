@@ -5,7 +5,7 @@ import os
 from modules.pgn_loader import load_games_from_file, iterate_positions
 from modules.chess_com_loader import fetch_recent_games
 from modules.position_analyzer import detect_concepts
-from modules.stockfish_validator import batch_validate
+from modules.stockfish_validator import batch_validate, open_engine
 from modules.profile_builder import build_profile, save_profile
 from modules.ai_diagnostician import diagnose, load_silman_concepts
 
@@ -27,30 +27,44 @@ def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.W
     games = load_games_from_file(pgn_path)
 
     # 2. Para cada partida, coleta posições e dados
+    _no_error = {"is_error": False, "eval_before": None, "eval_after": None, "error_magnitude": 0, "best_move": None}
+
+    # 2. Para cada partida, coleta posições e dados (1 instância do Stockfish para tudo)
     games_data = []
-    for i, game in enumerate(games):
-        print(f"[main] Processando partida {i + 1}/{len(games)}...")
-        game_positions = []
-        positions_to_validate = []
+    engine = open_engine()
+    try:
+        for i, game in enumerate(games):
+            print(f"[main] Processando partida {i + 1}/{len(games)}...")
+            game_positions = []
+            positions_with_concepts = []  # (original_index, board_before, move_played)
 
-        for board_before, move_played, board_after in iterate_positions(game, player_color):
-            concepts = detect_concepts(board_before, player_color)
-            positions_to_validate.append((board_before.copy(), move_played))
-            game_positions.append({
-                "fen": board_before.fen(),
-                "move_played": move_played.uci(),
-                "concepts_detected": concepts,
-                "stockfish_validation": None
+            for board_before, move_played, board_after in iterate_positions(game, player_color):
+                concepts = detect_concepts(board_before, player_color)
+                pos_idx = len(game_positions)
+                if any(v.get("detected") for v in concepts.values()):
+                    positions_with_concepts.append((pos_idx, board_before.copy(), move_played))
+                game_positions.append({
+                    "fen": board_before.fen(),
+                    "move_played": move_played.uci(),
+                    "concepts_detected": concepts,
+                    "stockfish_validation": _no_error,
+                })
+
+            if positions_with_concepts:
+                idxs, boards, moves = zip(*positions_with_concepts)
+                validations = batch_validate(list(zip(boards, moves)), engine=engine)
+                for idx, validation in zip(idxs, validations):
+                    game_positions[idx]["stockfish_validation"] = validation
+
+            games_data.append({
+                "game_id": f"game_{i + 1}",
+                "white": game.headers.get("White", "White"),
+                "black": game.headers.get("Black", "Black"),
+                "player_color": "white" if player_color else "black",
+                "positions": game_positions
             })
-
-        validations = batch_validate(positions_to_validate)
-        for j, validation in enumerate(validations):
-            game_positions[j]["stockfish_validation"] = validation
-
-        games_data.append({
-            "game_id": f"game_{i + 1}",
-            "positions": game_positions
-        })
+    finally:
+        engine.quit()
 
     # 3. Constrói perfil de fraquezas
     print("\n[main] Construindo perfil de fraquezas...")
@@ -104,30 +118,43 @@ def analyze_player_from_username(username: str, n_months: int = 3):
     game_color_pairs = fetch_recent_games(username, n_months=n_months)
     print(f"[main] {len(game_color_pairs)} partidas carregadas do Chess.com")
 
+    _no_error = {"is_error": False, "eval_before": None, "eval_after": None, "error_magnitude": 0, "best_move": None}
+
     games_data = []
-    for i, (game, player_color) in enumerate(game_color_pairs):
-        print(f"[main] Processando partida {i + 1}/{len(game_color_pairs)}...")
-        game_positions = []
-        positions_to_validate = []
+    engine = open_engine()
+    try:
+        for i, (game, player_color) in enumerate(game_color_pairs):
+            print(f"[main] Processando partida {i + 1}/{len(game_color_pairs)}...")
+            game_positions = []
+            positions_with_concepts = []
 
-        for board_before, move_played, board_after in iterate_positions(game, player_color):
-            concepts = detect_concepts(board_before, player_color)
-            positions_to_validate.append((board_before.copy(), move_played))
-            game_positions.append({
-                "fen": board_before.fen(),
-                "move_played": move_played.uci(),
-                "concepts_detected": concepts,
-                "stockfish_validation": None
+            for board_before, move_played, board_after in iterate_positions(game, player_color):
+                concepts = detect_concepts(board_before, player_color)
+                pos_idx = len(game_positions)
+                if any(v.get("detected") for v in concepts.values()):
+                    positions_with_concepts.append((pos_idx, board_before.copy(), move_played))
+                game_positions.append({
+                    "fen": board_before.fen(),
+                    "move_played": move_played.uci(),
+                    "concepts_detected": concepts,
+                    "stockfish_validation": _no_error,
+                })
+
+            if positions_with_concepts:
+                idxs, boards, moves = zip(*positions_with_concepts)
+                validations = batch_validate(list(zip(boards, moves)), engine=engine)
+                for idx, validation in zip(idxs, validations):
+                    game_positions[idx]["stockfish_validation"] = validation
+
+            games_data.append({
+                "game_id": f"game_{i + 1}",
+                "white": game.headers.get("White", "White"),
+                "black": game.headers.get("Black", "Black"),
+                "player_color": "white" if player_color else "black",
+                "positions": game_positions
             })
-
-        validations = batch_validate(positions_to_validate)
-        for j, validation in enumerate(validations):
-            game_positions[j]["stockfish_validation"] = validation
-
-        games_data.append({
-            "game_id": f"game_{i + 1}",
-            "positions": game_positions
-        })
+    finally:
+        engine.quit()
 
     print("\n[main] Construindo perfil de fraquezas...")
     profile = build_profile(games_data)

@@ -3,7 +3,7 @@ import pytest
 
 def test_stockfish_depth():
     import config
-    assert config.STOCKFISH_DEPTH == 15
+    assert config.STOCKFISH_DEPTH == 10
 
 
 def test_error_threshold_cp():

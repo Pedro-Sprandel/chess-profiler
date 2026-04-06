@@ -59,6 +59,10 @@ for i, pos in enumerate(positions):
         board = chess.Board(fen)
         move_played = pos.get("move_played")
         best_move = pos.get("best_move")
+        player_color = pos.get("player_color", "white")
+        orientation = chess.WHITE if player_color == "white" else chess.BLACK
+        white_name = pos.get("white", "White")
+        black_name = pos.get("black", "Black")
 
         arrows = []
         if move_played:
@@ -68,13 +72,25 @@ for i, pos in enumerate(positions):
             m = chess.Move.from_uci(best_move)
             arrows.append(chess.svg.Arrow(m.from_square, m.to_square, color="#00aa00"))
 
-        svg = chess.svg.board(board, arrows=arrows, size=360)
+        svg = chess.svg.board(board, arrows=arrows, size=360, orientation=orientation)
+
+        # Player name labels — top is the opponent, bottom is the analyzed player
+        if orientation == chess.WHITE:
+            top_name, bottom_name = black_name, white_name
+        else:
+            top_name, bottom_name = white_name, black_name
 
         col_board, col_info = st.columns([1, 1])
         with col_board:
             components.html(
-                f'<div style="display:flex;justify-content:center">{svg}</div>',
-                height=390,
+                f"""
+                <div style="font-family:sans-serif;text-align:center">
+                  <div style="margin-bottom:4px;font-weight:600;color:#555">{top_name}</div>
+                  {svg}
+                  <div style="margin-top:4px;font-weight:700;color:#000">{bottom_name} ⬅ you</div>
+                </div>
+                """,
+                height=430,
             )
         with col_info:
             st.markdown(f"**Game:** {pos.get('game_id', '?')}")
