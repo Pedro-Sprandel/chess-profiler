@@ -2,7 +2,7 @@
 
 ## Phase 1: Setup & Scaffolding
 
-- [x] Task: Add new dependencies to `requirements.txt`
+- [x] Task: Add new dependencies to `requirements.txt` [8ab94f2]
   - [x] Sub-task: Write a test that imports `streamlit`, `plotly`, and `chess.svg` and asserts no `ImportError`
   - [x] Sub-task: Add `streamlit` and `plotly` to `requirements.txt` and run `pip install -r requirements.txt` (chessboard uses built-in `chess.svg`)
 
