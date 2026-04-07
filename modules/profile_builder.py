@@ -1,5 +1,7 @@
 import json
+import chess
 from config import MIN_OCCURRENCES
+from modules.concept_relevance import is_instructive
 
 
 def build_profile(games_data: list) -> dict:
@@ -36,16 +38,28 @@ def build_profile(games_data: list) -> dict:
                             }
                         concept_stats[concept_key]["error_occurrences"] += 1
                         concept_stats[concept_key]["total_error_magnitude"] += validation["error_magnitude"]
-                        concept_stats[concept_key]["positions"].append({
-                            "game_id": game["game_id"],
-                            "white": game.get("white", "White"),
-                            "black": game.get("black", "Black"),
-                            "player_color": game.get("player_color", "white"),
-                            "fen": position.get("fen"),
-                            "move_played": position.get("move_played"),
-                            "best_move": validation.get("best_move"),
-                            "error_magnitude": validation["error_magnitude"]
-                        })
+
+                        # Only store instructive samples where the error is causally
+                        # linked to the Silman concept (best move handles it better)
+                        fen = position.get("fen")
+                        move_played = position.get("move_played")
+                        best_move = validation.get("best_move")
+                        player_color_bool = game.get("player_color", "white") == "white"
+
+                        if fen and is_instructive(
+                            chess.Board(fen), move_played, best_move,
+                            concept_key, player_color_bool
+                        ):
+                            concept_stats[concept_key]["positions"].append({
+                                "game_id": game["game_id"],
+                                "white": game.get("white", "White"),
+                                "black": game.get("black", "Black"),
+                                "player_color": game.get("player_color", "white"),
+                                "fen": fen,
+                                "move_played": move_played,
+                                "best_move": best_move,
+                                "error_magnitude": validation["error_magnitude"]
+                            })
             else:
                 for concept_key, concept_data in concepts.items():
                     if concept_data.get("detected", False):
