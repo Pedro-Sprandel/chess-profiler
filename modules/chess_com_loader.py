@@ -28,9 +28,12 @@ def fetch_games_from_archive(archive_url: str) -> list:
     return resp.json()["games"]
 
 
-def fetch_recent_games(username: str, n_months: int = 3) -> list:
+def fetch_recent_games(username: str, n_games: int = 50) -> list:
     """
-    Fetches the n_months most recent months of games for a Chess.com user.
+    Fetches the n_games most recent games for a Chess.com user.
+
+    Iterates monthly archives from most recent backwards and stops as soon
+    as n_games valid games have been collected.
 
     Returns a list of (chess.pgn.Game, player_color) tuples where
     player_color is chess.WHITE or chess.BLACK depending on which side
@@ -40,12 +43,17 @@ def fetch_recent_games(username: str, n_months: int = 3) -> list:
     Username comparison is case-insensitive.
     """
     archives = fetch_archives(username)
-    recent = archives[-n_months:] if len(archives) >= n_months else archives
 
     results = []
-    for archive_url in recent:
+    for archive_url in reversed(archives):
+        if len(results) >= n_games:
+            break
+
         raw_games = fetch_games_from_archive(archive_url)
-        for raw in raw_games:
+        for raw in reversed(raw_games):  # most recent first within the month
+            if len(results) >= n_games:
+                break
+
             pgn_str = raw.get("pgn", "").strip()
             if not pgn_str:
                 continue
@@ -62,4 +70,5 @@ def fetch_recent_games(username: str, n_months: int = 3) -> list:
 
             results.append((game, player_color))
 
-    return results
+    # Return in chronological order (oldest first)
+    return list(reversed(results))

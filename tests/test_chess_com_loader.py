@@ -94,7 +94,7 @@ class TestFetchRecentGames:
                    return_value=ARCHIVE_RESPONSE["archives"]), \
              patch("modules.chess_com_loader.fetch_games_from_archive",
                    return_value=GAMES_RESPONSE["games"]):
-            result = fetch_recent_games("sprandel", n_months=1)
+            result = fetch_recent_games("sprandel", n_games=50)
         assert isinstance(result, list)
         assert len(result) > 0
         game, color = result[0]
@@ -106,7 +106,7 @@ class TestFetchRecentGames:
                    return_value=ARCHIVE_RESPONSE["archives"]), \
              patch("modules.chess_com_loader.fetch_games_from_archive",
                    return_value=GAMES_RESPONSE["games"]):
-            result = fetch_recent_games("sprandel", n_months=1)
+            result = fetch_recent_games("sprandel", n_games=50)
         _, color = result[0]
         assert color == chess.WHITE
 
@@ -124,18 +124,18 @@ class TestFetchRecentGames:
                    return_value=ARCHIVE_RESPONSE["archives"]), \
              patch("modules.chess_com_loader.fetch_games_from_archive",
                    return_value=[black_game]):
-            result = fetch_recent_games("sprandel", n_months=1)
+            result = fetch_recent_games("sprandel", n_games=50)
         _, color = result[0]
         assert color == chess.BLACK
 
-    def test_respects_n_months_limit(self):
+    def test_respects_n_games_limit(self):
         from modules.chess_com_loader import fetch_recent_games
-        with patch("modules.chess_com_loader.fetch_archives",
-                   return_value=ARCHIVE_RESPONSE["archives"]) as mock_archives, \
+        many_archives = [f"https://api.chess.com/pub/player/sprandel/games/2024/{i:02d}" for i in range(1, 13)]
+        with patch("modules.chess_com_loader.fetch_archives", return_value=many_archives), \
              patch("modules.chess_com_loader.fetch_games_from_archive",
-                   return_value=GAMES_RESPONSE["games"]) as mock_fetch:
-            fetch_recent_games("sprandel", n_months=2)
-        assert mock_fetch.call_count == 2
+                   return_value=GAMES_RESPONSE["games"]):
+            result = fetch_recent_games("sprandel", n_games=1)
+        assert len(result) == 1
 
     def test_skips_games_with_missing_pgn(self):
         from modules.chess_com_loader import fetch_recent_games
@@ -143,11 +143,11 @@ class TestFetchRecentGames:
             {"white": {"username": "sprandel"}, "black": {"username": "opp"}, "pgn": ""},
             GAMES_RESPONSE["games"][0],
         ]
-        with patch("modules.chess_com_loader.fetch_archives",
-                   return_value=ARCHIVE_RESPONSE["archives"]), \
+        single_archive = [ARCHIVE_RESPONSE["archives"][0]]
+        with patch("modules.chess_com_loader.fetch_archives", return_value=single_archive), \
              patch("modules.chess_com_loader.fetch_games_from_archive",
                    return_value=games_with_missing):
-            result = fetch_recent_games("sprandel", n_months=1)
+            result = fetch_recent_games("sprandel", n_games=50)
         assert len(result) == 1
 
     def test_username_comparison_is_case_insensitive(self):
@@ -158,6 +158,6 @@ class TestFetchRecentGames:
                    return_value=ARCHIVE_RESPONSE["archives"]), \
              patch("modules.chess_com_loader.fetch_games_from_archive",
                    return_value=[upper_game]):
-            result = fetch_recent_games("sprandel", n_months=1)
+            result = fetch_recent_games("sprandel", n_games=50)
         _, color = result[0]
         assert color == chess.WHITE

@@ -102,7 +102,7 @@ def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.W
     return profile, diagnosis
 
 
-def analyze_player_from_username(username: str, n_months: int = 3):
+def analyze_player_from_username(username: str, n_games: int = 50):
     """
     Pipeline completo de análise a partir de um username do Chess.com.
 
@@ -110,12 +110,12 @@ def analyze_player_from_username(username: str, n_months: int = 3):
     detecta a cor do jogador em cada partida, e executa o pipeline completo.
 
     username: nome de usuário no Chess.com
-    n_months: quantos meses recentes buscar (padrão: 3)
+    n_games: quantas partidas recentes buscar (padrão: 50)
     """
     print(f"\n=== Iniciando análise de {username} via Chess.com API ===\n")
-    print(f"[main] Buscando jogos dos últimos {n_months} meses...")
+    print(f"[main] Buscando as últimas {n_games} partidas...")
 
-    game_color_pairs = fetch_recent_games(username, n_months=n_months)
+    game_color_pairs = fetch_recent_games(username, n_games=n_games)
     print(f"[main] {len(game_color_pairs)} partidas carregadas do Chess.com")
 
     _no_error = {"is_error": False, "eval_before": None, "eval_after": None, "error_magnitude": 0, "best_move": None}
@@ -193,7 +193,7 @@ def analyze_player_from_username(username: str, n_months: int = 3):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Chess Strategic Profiler")
     parser.add_argument("--user", required=True, help="Chess.com username to analyze")
-    parser.add_argument("--months", type=int, default=3, help="Number of recent months to fetch (default: 3)")
+    parser.add_argument("--games", type=int, default=50, help="Number of recent games to fetch (default: 50)")
     parser.add_argument("--pgn", help="Path to a local PGN file (overrides --user)")
     parser.add_argument("--color", choices=["white", "black"], default="white",
                         help="Player color when using --pgn (default: white)")
@@ -206,4 +206,4 @@ if __name__ == "__main__":
             player_color=chess.WHITE if args.color == "white" else chess.BLACK
         )
     else:
-        analyze_player_from_username(username=args.user, n_months=args.months)
+        analyze_player_from_username(username=args.user, n_games=args.games)

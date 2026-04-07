@@ -19,16 +19,16 @@ with tab_fresh:
 
     if source == "Chess.com username":
         username = st.text_input("Chess.com username")
-        months = st.slider("Months to fetch", min_value=1, max_value=12, value=3)
+        n_games = st.slider("Number of recent games to fetch", min_value=10, max_value=200, value=50, step=10)
 
         if st.button("Run Analysis", key="run_chesscom"):
             if not username.strip():
                 st.error("Please enter a username.")
             else:
-                with st.spinner(f"Fetching and analyzing games for **{username}**… this may take a few minutes."):
+                with st.spinner(f"Fetching and analyzing **{n_games}** games for **{username}**… this may take a few minutes."):
                     try:
                         profile, diagnosis = analyze_player_from_username(
-                            username=username.strip(), n_months=months
+                            username=username.strip(), n_games=n_games
                         )
                         st.success("Analysis complete!")
                         st.json({"weaknesses_found": len(profile["weaknesses"]),
