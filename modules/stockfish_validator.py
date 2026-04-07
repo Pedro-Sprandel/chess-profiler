@@ -3,6 +3,11 @@ import chess.engine
 from config import STOCKFISH_PATH, STOCKFISH_DEPTH, ERROR_THRESHOLD_CP
 
 
+def open_engine() -> chess.engine.SimpleEngine:
+    """Opens and returns a Stockfish engine instance. Caller is responsible for closing it."""
+    return chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+
+
 def validate_move(board_before: chess.Board, move_played: chess.Move) -> dict:
     """
     Usa o Stockfish para validar se o lance jogado foi um erro.
@@ -48,15 +53,18 @@ def validate_move(board_before: chess.Board, move_played: chess.Move) -> dict:
         engine.quit()
 
 
-def batch_validate(positions: list) -> list:
+def batch_validate(positions: list, engine: chess.engine.SimpleEngine = None) -> list:
     """
     Valida múltiplas posições reutilizando a mesma instância do Stockfish.
     positions: lista de (board_before, move_played)
+    engine: instância existente do Stockfish (se None, cria e fecha uma nova)
     Retorna lista de dicts com resultados.
     """
-    engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
-    results = []
+    owns_engine = engine is None
+    if owns_engine:
+        engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
 
+    results = []
     try:
         for board_before, move_played in positions:
             info_before = engine.analyse(board_before, chess.engine.Limit(depth=STOCKFISH_DEPTH))
@@ -73,8 +81,13 @@ def batch_validate(positions: list) -> list:
             else:
                 error_magnitude = score_before - score_after
 
+            # If the player played Stockfish's own best move it cannot be an error,
+            # regardless of centipawn difference between the two independent analyses
+            # (which can diverge due to the horizon effect at fixed depth).
+            played_best = best_move is not None and move_played == best_move
+
             results.append({
-                "is_error": error_magnitude > ERROR_THRESHOLD_CP,
+                "is_error": not played_best and error_magnitude > ERROR_THRESHOLD_CP,
                 "eval_before": score_before,
                 "eval_after": score_after,
                 "error_magnitude": error_magnitude,
@@ -82,6 +95,7 @@ def batch_validate(positions: list) -> list:
             })
 
     finally:
-        engine.quit()
+        if owns_engine:
+            engine.quit()
 
     return results
