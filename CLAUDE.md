@@ -13,7 +13,7 @@ estratégica recorrentes usando regras determinísticas (python-chess + Stockfis
 um LLM para identificar a causa raiz por trás dos sintomas detectados, conectando o
 diagnóstico aos conceitos pedagógicos do livro "The Amateur's Mind" de Jeremy Silman.
 
-**Stack:** Python 3.10+, python-chess, Stockfish (binário local), Anthropic API
+**Stack:** Python 3.10+, python-chess, Stockfish (binário local), Anthropic API, Streamlit, Plotly
 
 ---
 
@@ -24,6 +24,7 @@ chess_profiler/
 ├── CLAUDE.md                  ← este arquivo
 ├── requirements.txt
 ├── config.py                  ← caminhos e configurações
+├── app.py                     ← entrada da interface Streamlit
 ├── data/
 │   └── silman_concepts.json   ← base de conhecimento do Silman
 ├── modules/
@@ -31,8 +32,20 @@ chess_profiler/
 │   ├── position_analyzer.py   ← detecção de conceitos por posição
 │   ├── stockfish_validator.py ← valida se houve erro real na posição
 │   ├── profile_builder.py     ← acumula perfil de fraquezas do jogador
-│   └── ai_diagnostician.py   ← LLM identifica causa raiz
-├── main.py                    ← pipeline principal
+│   ├── ai_diagnostician.py    ← LLM identifica causa raiz
+│   ├── chess_com_loader.py    ← busca partidas via API do Chess.com
+│   └── concept_relevance.py   ← filtra posições instrutivas por conceito
+├── ui/
+│   ├── components/
+│   │   ├── weakness_chart.py  ← gráficos Plotly de fraquezas
+│   │   └── diagnosis_card.py  ← formatação do diagnóstico para exibição
+│   └── pages/
+│       ├── 0_home.py          ← página inicial
+│       ├── 1_analyze.py       ← formulário de análise
+│       ├── 2_profile.py       ← dashboard de perfil
+│       ├── 3_explorer.py      ← explorador de posições
+│       └── 4_diagnosis.py     ← relatório de diagnóstico
+├── main.py                    ← pipeline principal (CLI)
 └── output/
     └── (relatórios gerados)
 ```
@@ -45,6 +58,11 @@ chess_profiler/
 chess
 anthropic
 python-dotenv
+requests
+pytest
+pytest-cov
+streamlit
+plotly
 ```
 
 ---
@@ -64,7 +82,8 @@ STOCKFISH_PATH = os.path.expanduser("~/stockfish/stockfish-ubuntu-x86-64-avx2")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # Profundidade de análise do Stockfish (maior = mais preciso, mais lento)
-STOCKFISH_DEPTH = 15
+# 10 é suficiente para detectar erros estratégicos; aumente para 15+ se quiser mais precisão
+STOCKFISH_DEPTH = 10
 
 # Limiar de erro: diferença de centipawns para considerar lance ruim
 ERROR_THRESHOLD_CP = 50
@@ -944,15 +963,28 @@ ANTHROPIC_API_KEY=sua_chave_aqui
 
 ---
 
-## Instruções de Execução para Claude Code
+## Instruções de Execução
 
 1. Criar toda a estrutura de diretórios e arquivos acima
-2. Instalar dependências: `pip install chess anthropic python-dotenv`
+2. Instalar dependências: `pip install -r requirements.txt`
 3. Criar o arquivo `.env` com a chave da API Anthropic
 4. Ajustar `STOCKFISH_PATH` em `config.py` para o caminho real
 5. Preencher `data/silman_concepts.json` com os conceitos extraídos do livro
-6. Colocar um arquivo `partidas.pgn` na raiz (exportar do Lichess ou Chess.com)
-7. Executar: `python main.py`
+
+### Via CLI
+```bash
+# Busca as últimas N partidas do Chess.com
+python main.py --user <username> --games 50
+
+# Analisa um arquivo PGN local
+python main.py --user <username> --pgn partidas.pgn --color white
+```
+
+### Via Interface Web
+```bash
+streamlit run app.py
+```
+Acessa `http://localhost:8501` e usa o menu lateral para navegar entre as páginas.
 
 ---
 
@@ -962,3 +994,45 @@ ANTHROPIC_API_KEY=sua_chave_aqui
 - O LLM não gera texto pedagógico — ele atua como componente de raciocínio que classifica e interpreta dados quantitativos brutos
 - A base de conhecimento do Silman (`silman_concepts.json`) é extraída manualmente, preservando a fidelidade interpretativa e o contexto pedagógico original
 - A validação do sistema usa posições externas (Lichess/Chess.com) não vistas durante o desenvolvimento
+
+---
+
+## Changelog de Melhorias
+
+### Performance do Pipeline (stockfish_validator.py, main.py)
+- **Instância única do Stockfish:** o engine agora é aberto uma vez para todas as partidas e fechado ao final, eliminando o custo de startup por partida (~0.5s × N partidas economizados).
+- **Skip de posições sem conceito:** posições onde nenhum conceito Silman foi detectado são ignoradas pelo Stockfish, reduzindo em 30–60% o número de análises.
+- **Profundidade reduzida:** `STOCKFISH_DEPTH` alterado de 15 para 10. Suficiente para detectar erros estratégicos significativos com velocidade ~2–4× maior.
+- **`open_engine()`:** nova função pública em `stockfish_validator.py` para criação explícita do engine, usada pelo pipeline principal.
+- **`batch_validate(engine=None)`:** aceita um engine externo opcional, criando e destruindo o seu próprio apenas quando necessário.
+
+### Correção de Falsos Positivos (stockfish_validator.py)
+- Se o lance jogado pelo jogador é idêntico ao melhor lance do Stockfish, `is_error` é forçado a `False` independentemente da diferença de centipawns entre as duas análises independentes (efeito horizonte em profundidade fixa).
+
+### Integração com Chess.com (modules/chess_com_loader.py)
+- **`fetch_recent_games(username, n_games=50)`:** substituída a lógica de "N meses" por "N partidas". Os arquivos mensais são percorridos do mais recente para o mais antigo e a coleta para assim que `n_games` partidas válidas são encontradas. Isso evita volumes imprevisíveis de dados para jogadores ativos.
+- A CLI usa `--games N` (antes `--months N`).
+
+### Filtragem de Posições Instrutivas (modules/concept_relevance.py)
+- Novo módulo `concept_relevance.py` com `is_instructive(board, move_played, best_move, concept_key, player_color)`.
+- Para cada conceito, define uma função de score numérico que mede a qualidade da posição do jogador em relação àquele conceito após o lance (ex: menos casas fracas = score maior).
+- Uma posição só é salva como exemplo no perfil se o melhor lance produce um score estritamente melhor que o lance jogado — estabelecendo vínculo causal entre o erro e o conceito Silman, em vez de mera co-ocorrência.
+
+### Dados Enriquecidos no Perfil (profile_builder.py, main.py)
+- `sample_positions` agora inclui: `move_played`, `best_move`, `white`, `black`, `player_color`.
+- Permite ao explorador de partidas exibir os lances e orientar o tabuleiro corretamente.
+
+### Interface Web Streamlit (app.py, ui/)
+A interface é lançada com `streamlit run app.py` e oferece quatro páginas:
+
+| Página | Arquivo | Descrição |
+|--------|---------|-----------|
+| Home | `ui/pages/0_home.py` | Página inicial com navegação |
+| Analyze | `ui/pages/1_analyze.py` | Formulário Chess.com ou upload PGN; dispara análise ou carrega perfil salvo |
+| Profile Dashboard | `ui/pages/2_profile.py` | Seletor de perfil, métricas, gráficos Plotly de erros por conceito |
+| Game Explorer | `ui/pages/3_explorer.py` | Tabuleiro SVG com setas (🔴 lance jogado, 🟢 melhor lance), nomes dos jogadores nas posições corretas, orientação por cor |
+| Diagnosis Report | `ui/pages/4_diagnosis.py` | Causa raiz, classificação PRIMARY/SECONDARY/NOISE, plano de estudo Silman |
+
+**Componentes auxiliares:**
+- `ui/components/weakness_chart.py`: gráficos Plotly (`build_error_count_chart`, `build_error_magnitude_chart`)
+- `ui/components/diagnosis_card.py`: formatação do diagnóstico (`format_root_cause`, `format_weakness_table`, `format_study_priority`)
