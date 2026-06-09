@@ -3,7 +3,16 @@
     "allow": [
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(pip index:*)",
+      "Bash(pip search:*)",
+      "Bash(git notes:*)",
+      "Bash(grep -v '\\\\.md$')",
+      "Bash(grep -v '\\\\.json$')",
+      "Bash(python3:*)",
+      "Bash(awk -F'::' '{print $1}')",
+      "Bash(pytest *)"
     ]
   },
   "enabledPlugins": {

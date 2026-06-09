@@ -26,7 +26,7 @@ def format_study_priority(diagnosis: dict) -> list:
     for item in sorted(diagnosis.get("study_priority", []), key=lambda x: x.get("priority_rank", 99)):
         items.append({
             "rank": item.get("priority_rank"),
-            "concept": item.get("silman_name", item.get("concept", "")).replace("_", " ").title(),
+            "concept": item.get("concept", "").replace("_", " ").title(),
             "chapter": item.get("silman_chapter", "?"),
             "page": item.get("silman_page", "?"),
             "reason": item.get("reason", ""),

@@ -1,8 +1,8 @@
-chess
-anthropic
-python-dotenv
-requests
-pytest
-pytest-cov
-streamlit
-plotly
+chess>=1.11,<2
+anthropic>=0.88,<1
+python-dotenv>=1.2,<2
+requests>=2.32,<3
+pytest>=9.0,<10
+pytest-cov>=7.1,<8
+streamlit>=1.56,<2
+plotly>=6.6,<7

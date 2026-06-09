@@ -48,9 +48,10 @@ class TestValidateMove:
         board = chess.Board()
         move = chess.Move.from_uci("e2e4")
 
+        # best_move differs from played move so played_best=False;
         # score drops 100cp for white → magnitude = 100 > 50 threshold
         with patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci") as mock_popen:
-            mock_popen.return_value = make_mock_engine(200, 100)
+            mock_popen.return_value = make_mock_engine(200, 100, best_move_uci="d2d4")
             result = validate_move(board, move)
 
         assert result["is_error"] is True
@@ -152,7 +153,9 @@ class TestBatchValidate:
         board = chess.Board()
         positions = [(board.copy(), chess.Move.from_uci("e2e4"))] * 3
 
-        with patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci") as mock_popen:
+        # Bypass cache so the engine path is always exercised
+        with patch("modules.stockfish_validator._get_db", return_value=None), \
+             patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci") as mock_popen:
             mock_engine = self._make_batch_engine([(100, 80)] * 3)
             mock_popen.return_value = mock_engine
             batch_validate(positions)

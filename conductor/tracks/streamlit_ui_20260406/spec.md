@@ -57,26 +57,46 @@ sits on top of the existing `modules/` layer without modifying it.
 
 ## File Structure
 ```
-app.py                        ← Streamlit entry point (home/nav)
+app.py                        ← Streamlit entry point; renders all sections + scroll-spy JS
 ui/
+  i18n.py                     ← Translations dict (en/pt) + t(key, **kwargs) helper
   components/
     weakness_chart.py         ← Plotly chart helpers
     diagnosis_card.py         ← Diagnosis display helpers
   pages/
-    1_analyze.py
-    2_profile.py
-    3_explorer.py
-    4_diagnosis.py
+    home.py                   ← render() — Home section
+    analyze.py                ← render() — Analyze section
+    profile.py                ← render() — Profile Dashboard section
+    explorer.py               ← render() — Game Explorer section
+    diagnosis.py              ← render() — Diagnosis Report section
 ```
+
+> **Note:** The old numbered page files (`0_home.py` … `4_diagnosis.py`) were replaced by
+> the non-prefixed versions above when the app was converted to single-page scroll architecture.
+
+## Single-Page Scroll Architecture
+- `app.py` calls each `render()` in sequence instead of using `st.navigation`.
+- Each `render()` starts with `st.markdown('<a name="section-id"></a>', unsafe_allow_html=True)` to create a scroll anchor.
+- The sidebar contains HTML anchor links (`href="#section-id"`) for jump navigation.
+- A `components.html(height=0)` at the bottom of `app.py` injects a scroll-spy script that highlights the active sidebar link as the user scrolls.
+
+## Internationalisation (i18n)
+- FR7: All UI strings are defined in `ui/i18n.py` and retrieved via `t(key)`.
+- FR8: A flag radio in the sidebar (`🇺🇸 English` / `🇧🇷 Português`) switches the language; the entire UI re-renders in the selected language on change.
+- Supported locales: `en` (English), `pt` (Brazilian Portuguese).
 
 ## Acceptance Criteria
 - [ ] `streamlit run app.py` launches without errors
+- [ ] All five sections are visible on a single continuous scroll
+- [ ] Sidebar navigation links scroll to the correct section
+- [ ] Active section is highlighted in the sidebar while scrolling
 - [ ] Fresh analysis can be triggered and completes successfully from the UI
 - [ ] All saved profiles in `output/` appear in the profile selector
 - [ ] Profile dashboard renders correct charts from loaded profile JSON
 - [ ] Game Explorer renders at least one chessboard position per weakness
 - [ ] Diagnosis report correctly displays root cause and study priority
 - [ ] All existing CLI functionality (`python main.py`) remains unaffected
+- [ ] Switching language updates all UI text immediately
 
 ## Out of Scope
 - User authentication

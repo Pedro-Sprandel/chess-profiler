@@ -1,1038 +1,482 @@
 # CLAUDE.md — Chess Strategic Profiler
-## Instruções para Claude Code
 
-Este documento define a implementação completa do sistema de diagnóstico estratégico
-personalizado de xadrez, desenvolvido como TCC de Sistemas de Informação (FACCAT).
-
----
-
-## Visão Geral do Sistema
-
-O sistema analisa partidas de um jogador em formato PGN, detecta padrões de fraqueza
-estratégica recorrentes usando regras determinísticas (python-chess + Stockfish), e usa
-um LLM para identificar a causa raiz por trás dos sintomas detectados, conectando o
-diagnóstico aos conceitos pedagógicos do livro "The Amateur's Mind" de Jeremy Silman.
-
-**Stack:** Python 3.10+, python-chess, Stockfish (binário local), Anthropic API, Streamlit, Plotly
+Sistema de diagnóstico estratégico personalizado de xadrez desenvolvido como TCC de
+Sistemas de Informação (FACCAT). Analisa partidas de um jogador, detecta padrões de
+fraqueza estratégica recorrentes com regras determinísticas (python-chess + Stockfish),
+e usa um LLM para identificar a causa raiz conectando o diagnóstico aos conceitos
+pedagógicos de *The Amateur's Mind* (Jeremy Silman).
 
 ---
 
-## Estrutura de Diretórios a Criar
+## Arquitetura
+
+Três camadas em sequência:
 
 ```
-chess_profiler/
-├── CLAUDE.md                  ← este arquivo
+Partidas (Chess.com API ou PGN)
+        ↓
+[1] Detecção determinística — position_analyzer.py
+    17 detectores de conceitos Silman por posição (python-chess)
+        ↓
+[2] Validação quantitativa — stockfish_validator.py
+    Confirma se houve erro real via Stockfish UCI (centipawns)
+    Cache SQLite evita re-análise de posições já vistas
+        ↓
+[3] Raciocínio causal — ai_diagnostician.py
+    Claude classifica fraquezas em PRIMARY/SECONDARY/NOISE
+    e identifica a causa raiz por trás dos sintomas
+        ↓
+Perfil JSON + Diagnóstico JSON (bilíngue EN/PT) → Interface Streamlit
+```
+
+**Stack:** Python 3.10+, python-chess, Stockfish (binário local), Anthropic API
+(claude-opus-4-6), Streamlit, Plotly, SQLite.
+
+---
+
+## Estrutura de Diretórios
+
+```
+v1/
+├── app.py                          ← entrada Streamlit (single-page scroll + scroll-spy)
+├── main.py                         ← pipeline CLI (_main(argv=None), --user, --games, --pgn, --color)
+├── config.py                       ← STOCKFISH_PATH, ANTHROPIC_API_KEY, thresholds
+├── eval_fen.py                     ← utilitário CLI para avaliar uma FEN manualmente
 ├── requirements.txt
-├── config.py                  ← caminhos e configurações
-├── app.py                     ← entrada da interface Streamlit
+├── .env                            ← ANTHROPIC_API_KEY (não versionado)
 ├── data/
-│   └── silman_concepts.json   ← base de conhecimento do Silman
+│   ├── silman_concepts.json        ← base de conhecimento: 17 conceitos em 5 categorias
+│   └── profiler.db                 ← SQLite: cache Stockfish + posições + resultados
 ├── modules/
-│   ├── pgn_loader.py          ← carrega e itera partidas PGN
-│   ├── position_analyzer.py   ← detecção de conceitos por posição
-│   ├── stockfish_validator.py ← valida se houve erro real na posição
-│   ├── profile_builder.py     ← acumula perfil de fraquezas do jogador
-│   ├── ai_diagnostician.py    ← LLM identifica causa raiz
-│   ├── chess_com_loader.py    ← busca partidas via API do Chess.com
-│   └── concept_relevance.py   ← filtra posições instrutivas por conceito
+│   ├── pgn_loader.py               ← carrega partidas de arquivo ou string PGN
+│   ├── chess_com_loader.py         ← busca N partidas recentes via API Chess.com
+│   ├── position_analyzer.py        ← 17 detectores de conceitos (retornam dicts tipados)
+│   ├── stockfish_validator.py      ← validação em batch com cache SQLite
+│   ├── concept_relevance.py        ← filtra posições instrutivas (3 gates causais)
+│   ├── profile_builder.py          ← acumula fraquezas longitudinalmente
+│   ├── ai_diagnostician.py         ← prompt Claude + parse JSON bilíngue estruturado
+│   ├── db.py                       ← camada SQLite (3 tabelas, WAL mode)
+│   └── fen_fetcher.py              ← busca FENs do Chess.com com filtros (não integrado ao pipeline)
 ├── ui/
+│   ├── i18n.py                     ← 85 chaves EN/PT-BR, função t(key, **kwargs)
 │   ├── components/
-│   │   ├── weakness_chart.py  ← gráficos Plotly de fraquezas
-│   │   └── diagnosis_card.py  ← formatação do diagnóstico para exibição
+│   │   ├── weakness_chart.py       ← gráficos Plotly de erros por conceito (usa i18n)
+│   │   └── diagnosis_card.py       ← formata output do diagnóstico
 │   └── pages/
-│       ├── 0_home.py          ← página inicial
-│       ├── 1_analyze.py       ← formulário de análise
-│       ├── 2_profile.py       ← dashboard de perfil
-│       ├── 3_explorer.py      ← explorador de posições
-│       └── 4_diagnosis.py     ← relatório de diagnóstico
-├── main.py                    ← pipeline principal (CLI)
-└── output/
-    └── (relatórios gerados)
+│       ├── home.py                 ← seção inicial (render())
+│       ├── analyze.py              ← formulário Chess.com/PGN + progress bar
+│       ├── profile.py              ← dashboard de métricas + gráficos
+│       ├── explorer.py             ← tabuleiro SVG com setas de lance/melhor lance
+│       └── diagnosis.py            ← causa raiz, classificação, plano de estudo
+├── tests/
+│   ├── test_position_analyzer.py   ← 59 testes com FENs conhecidas para os 17 detectores
+│   ├── test_stockfish_validator.py ← 11 testes (mock popen_uci + cache)
+│   ├── test_profile_builder.py     ← 10 testes
+│   ├── test_concept_relevance.py   ← 10 testes
+│   ├── test_ai_diagnostician.py    ← 9 testes (mock cliente Anthropic, formato bilíngue)
+│   ├── test_chess_com_loader.py    ← 11 testes
+│   ├── test_pgn_loader.py          ← 11 testes
+│   ├── test_main.py                ← 10 testes (mocks externos)
+│   ├── test_app.py                 ← 15 testes AppTest (5 classes, EN/PT, fixture com perfil)
+│   ├── test_cli.py                 ← 11 testes CLI (_main com argv)
+│   ├── test_pipeline_e2e.py        ← 13 testes integração (Stockfish real, @skip_no_sf)
+│   ├── test_diagnosis_card.py      ← 6 testes
+│   ├── test_weakness_chart.py      ← 6 testes
+│   ├── test_config.py              ← 4 testes
+│   └── test_ui_dependencies.py     ← 3 testes
+└── output/                         ← perfis e diagnósticos gerados ({user}_profile.json, etc.)
 ```
 
 ---
 
-## Passo 1 — requirements.txt
+## Configuração
 
-```
-chess
-anthropic
-python-dotenv
-requests
-pytest
-pytest-cov
-streamlit
-plotly
-```
-
----
-
-## Passo 2 — config.py
-
+**`config.py`**
 ```python
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# Ajustar para o caminho real do Stockfish na máquina
 STOCKFISH_PATH = os.path.expanduser("~/stockfish/stockfish-ubuntu-x86-64-avx2")
-
-# Anthropic API Key via variável de ambiente
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+STOCKFISH_DEPTH = 10        # profundidade UCI; 10 é suficiente para erros estratégicos
+ERROR_THRESHOLD_CP = 50     # diferença mínima em centipawns para classificar como erro
+MIN_OCCURRENCES = 3         # mínimo de erros para uma fraqueza entrar no perfil
+MAX_STAT_CP = 500           # cap de magnitude para estatísticas (evita distorção por posições de mate)
+MATE_SCORE = 10000          # valor de cp atribuído a mate (mate_score do python-chess)
+TACTICAL_THRESHOLD_CP = 9000  # acima disso a avaliação é considerada tática/decisiva
+HTTP_TIMEOUT = 15           # timeout (s) das chamadas à API do Chess.com
+ANTHROPIC_MODEL = "claude-opus-4-6"
+ANTHROPIC_MAX_TOKENS = 8192
 
-# Profundidade de análise do Stockfish (maior = mais preciso, mais lento)
-# 10 é suficiente para detectar erros estratégicos; aumente para 15+ se quiser mais precisão
-STOCKFISH_DEPTH = 10
+# config.validate_stockfish_path() valida existência/execução do binário (chamada por open_engine())
+```
 
-# Limiar de erro: diferença de centipawns para considerar lance ruim
-ERROR_THRESHOLD_CP = 50
-
-# Número mínimo de ocorrências para considerar uma fraqueza recorrente
-MIN_OCCURRENCES = 3
+**`.env`** (não versionado)
+```
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ---
 
-## Passo 3 — data/silman_concepts.json
+## Execução
 
-Criar este arquivo com a base de conhecimento extraída manualmente do Silman.
-Usar esta estrutura para cada conceito:
+```bash
+# Interface web
+streamlit run app.py
+# → http://localhost:8501
 
+# CLI — busca N partidas do Chess.com
+python main.py --user sprandel --games 50
+
+# CLI — analisa arquivo PGN local
+python main.py --user sprandel --pgn partidas.pgn --color white
+
+# Avalia uma FEN manualmente (debug)
+python eval_fen.py "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+python eval_fen.py "<FEN>" --depth 15 --json
+
+# Testes
+pytest                          # 189 testes, todos passando
+pytest -v --tb=short
+pytest tests/test_position_analyzer.py -v
+pytest tests/test_pipeline_e2e.py -v   # requer Stockfish instalado
+```
+
+---
+
+## Módulos — Interfaces Públicas
+
+### `modules/pgn_loader.py`
+```python
+load_games_from_file(pgn_path: str) -> list[chess.pgn.Game]
+load_games_from_string(pgn_string: str) -> list[chess.pgn.Game]
+iterate_positions(game, player_color: bool) -> Iterator[(board_before, move, board_after)]
+```
+
+### `modules/chess_com_loader.py`
+```python
+fetch_recent_games(username: str, n_games: int = 50) -> list[tuple[chess.pgn.Game, bool]]
+# Retorna lista de (game, player_color). Itera arquivos mensais do mais recente
+# para o mais antigo e para ao atingir n_games partidas válidas.
+```
+
+### `modules/position_analyzer.py`
+```python
+detect_concepts(board: chess.Board, player_color: bool) -> dict
+# Retorna dict com 17 chaves — uma por conceito Silman.
+# Cada valor é um dict com pelo menos {"detected": bool} + campos específicos.
+```
+
+Os 17 conceitos detectados:
+
+| detection_key | Categoria Silman |
+|---|---|
+| `weak_square` | desequilíbrios estáticos |
+| `knight_outpost` | desequilíbrios estáticos |
+| `space_advantage` | desequilíbrios estáticos |
+| `center_control` | desequilíbrios estáticos |
+| `open_file` | desequilíbrios dinâmicos |
+| `rook_on_7th` | desequilíbrios dinâmicos |
+| `piece_activity` | desequilíbrios dinâmicos |
+| `isolated_pawn` | estrutura de peões |
+| `passed_pawn` | estrutura de peões |
+| `doubled_pawn` | estrutura de peões |
+| `pawn_majority` | estrutura de peões |
+| `backward_pawn` | estrutura de peões |
+| `bishop_pair` | desequilíbrios de material |
+| `bad_bishop` | desequilíbrios de material |
+| `king_safety` | dinâmica |
+| `overloaded_piece` | dinâmica |
+| `hanging_piece` | dinâmica |
+
+### `modules/stockfish_validator.py`
+```python
+open_engine() -> chess.engine.SimpleEngine
+# Abre uma instância do Stockfish. Caller responsável por engine.quit().
+
+validate_move(board_before, move_played) -> dict
+# Abre/fecha engine internamente. Para uma posição isolada.
+
+batch_validate(positions: list[tuple], engine=None) -> list[dict]
+# positions: lista de (board_before, move_played)
+# engine: instância existente (None = cria e fecha a própria)
+# Resolve posições via cache SQLite antes de abrir o engine.
+# Retorna lista de dicts: {is_error, eval_before, eval_after, error_magnitude, best_move}
+
+evaluate_fen(fen: str, depth: int = STOCKFISH_DEPTH, use_cache: bool = True) -> dict
+# {score_cp, score_side, is_mate, mate_in, best_move, depth, turn}
+```
+
+**Correção de falso positivo:** se `move_played == best_move`, `is_error` é forçado
+a `False` independentemente da diferença de avaliação (efeito horizonte em profundidade fixa).
+
+### `modules/concept_relevance.py`
+```python
+is_instructive(board_before, move_played_uci, best_move_uci, concept_key, player_color) -> bool
+```
+
+Três gates em ordem de custo crescente:
+1. O jogador não jogou o melhor lance
+2. O melhor lance envolve o tipo de peça relevante para o conceito (ex: torre para `open_file`)
+3. O melhor lance melhora o score do conceito em pelo menos o threshold definido
+
+Se `best_move_uci` é `None`, retorna `True` (sem dados = não filtra).
+
+Scoring para os novos conceitos:
+- `hanging_piece`: `-count` (salvar a peça = 0; deixar pendurada = negativo)
+- `backward_pawn`: `-count`
+- `center_control`: `advantage` (ataques do jogador − ataques do adversário nos 4 centros)
+
+### `modules/profile_builder.py`
+```python
+build_profile(games_data: list) -> dict
+# games_data: lista de dicts com game_id, white, black, player_color, positions
+# Cada position precisa de concepts_detected e stockfish_validation.
+# Só conta um erro para um conceito se is_instructive() retornar True.
+# Fraqueza só entra no perfil se error_occurrences >= MIN_OCCURRENCES (default: 3).
+# error_magnitude é capeada em MAX_STAT_CP=500 para avg_error_magnitude_cp.
+
+save_profile(profile: dict, path: str)
+load_profile(path: str) -> dict
+```
+
+Estrutura de retorno do perfil:
 ```json
 {
-  "concepts": [
+  "total_games": int,
+  "total_positions_analyzed": int,
+  "total_errors_detected": int,
+  "overall_error_rate": float,
+  "weaknesses": [
     {
-      "id": "weak_square",
-      "name": "Casa Fraca",
-      "silman_chapter": 3,
-      "silman_page": 67,
-      "silman_category": "desequilíbrios estáticos",
-      "description": "Casa que não pode ser defendida por peões e pode ser ocupada por peças adversárias.",
-      "strategic_implications": "Permite infiltração de cavalos e bispos adversários em posições fixas.",
-      "detection_key": "weak_square"
-    },
-    {
-      "id": "open_file",
-      "name": "Coluna Aberta",
-      "silman_chapter": 4,
-      "silman_page": 89,
-      "silman_category": "desequilíbrios dinâmicos",
-      "description": "Coluna sem peões de nenhuma das cores, ideal para torres.",
-      "strategic_implications": "Quem controla colunas abertas controla o espaço e penetração.",
-      "detection_key": "open_file"
-    },
-    {
-      "id": "isolated_pawn",
-      "name": "Peão Isolado",
-      "silman_chapter": 5,
-      "silman_page": 112,
-      "silman_category": "estrutura de peões",
-      "description": "Peão sem peões aliados nas colunas adjacentes.",
-      "strategic_implications": "Fraqueza permanente que requer defesa passiva. Adversário pressiona essa fraqueza.",
-      "detection_key": "isolated_pawn"
-    },
-    {
-      "id": "bishop_pair",
-      "name": "Par de Bispos",
-      "silman_chapter": 6,
-      "silman_page": 134,
-      "silman_category": "desequilíbrios de material",
-      "description": "Possuir dois bispos enquanto o adversário tem cavalo(s) ou bispo único.",
-      "strategic_implications": "Vantagem em posições abertas. Devem ser ativados abrindo o jogo.",
-      "detection_key": "bishop_pair"
-    },
-    {
-      "id": "knight_outpost",
-      "name": "Cavalo em Posto Avançado",
-      "silman_chapter": 3,
-      "silman_page": 71,
-      "silman_category": "desequilíbrios estáticos",
-      "description": "Cavalo em casa fraca no campo adversário, protegido por peão.",
-      "strategic_implications": "Cavalo fixo no centro ou campo adversário é uma vantagem posicional duradoura.",
-      "detection_key": "knight_outpost"
-    },
-    {
-      "id": "king_safety",
-      "name": "Segurança do Rei",
-      "silman_chapter": 7,
-      "silman_page": 156,
-      "silman_category": "dinâmica",
-      "description": "Avaliação da exposição do rei baseada em cobertura de peões e atividade adversária.",
-      "strategic_implications": "Rei exposto prioriza ataque imediato. Desequilíbrio que supera fatores posicionais.",
-      "detection_key": "king_safety"
-    },
-    {
-      "id": "space_advantage",
-      "name": "Vantagem de Espaço",
-      "silman_chapter": 8,
-      "silman_page": 178,
-      "silman_category": "desequilíbrios estáticos",
-      "description": "Controle de mais casas no tabuleiro, especialmente no centro.",
-      "strategic_implications": "Mais espaço = mais opções de manobra e restrição das peças adversárias.",
-      "detection_key": "space_advantage"
+      "concept": "detection_key",
+      "total_occurrences": int,
+      "error_occurrences": int,
+      "error_rate": float,
+      "avg_error_magnitude_cp": float,
+      "sample_positions": [
+        {
+          "game_id": str, "white": str, "black": str,
+          "player_color": "white"|"black",
+          "fen": str, "move_played": str, "best_move": str,
+          "error_magnitude": float
+        }
+      ]
     }
   ]
 }
 ```
 
+### `modules/ai_diagnostician.py`
+```python
+load_silman_concepts(path: str = "data/silman_concepts.json") -> dict
+# Retorna dict indexado por detection_key.
+
+diagnose(player_profile: dict, silman_concepts: dict) -> dict
+```
+
+Modelo e limite de tokens vêm de `config.py` (`ANTHROPIC_MODEL = "claude-opus-4-6"`,
+`ANTHROPIC_MAX_TOKENS = 8192`). A chamada à API tem retry com backoff exponencial em
+erros transitórios (rate limit / 5xx / conexão) e extração robusta de JSON via
+`_extract_json()`. Levanta `RuntimeError` se `ANTHROPIC_API_KEY` não estiver definida.
+
+O diagnóstico é retornado em formato **bilíngue** via uma única chamada à API:
+
+```json
+{
+  "en": {
+    "root_cause": {"id": str, "name": str, "description": str},
+    "weakness_classification": [
+      {"concept": str, "classification": "PRIMARY|SECONDARY|NOISE", "reasoning": str}
+    ],
+    "study_priority": [
+      {"concept": str, "silman_chapter": int, "priority_rank": int, "reason": str,
+       "silman_name": str, "silman_page": int, "silman_description": str}
+    ],
+    "cognitive_pattern": str,
+    "confidence": "HIGH|MEDIUM|LOW"
+  },
+  "pt": { ... mesma estrutura em português ... }
+}
+```
+
+A página `diagnosis.py` lê `diagnosis_raw.get(lang, diagnosis_raw.get("en", {}))`,
+mantendo compatibilidade com arquivos antigos em formato flat.
+
+### `modules/db.py`
+```python
+db = Database()                    # default: data/profiler.db (WAL mode)
+db = Database("custom/path.db")
+
+# Cache Stockfish
+db.cache_eval(fen, depth, score_cp, best_move)
+db.get_cached_eval(fen, depth) -> dict | None   # {"score_cp": int, "best_move": str}
+db.cache_stats() -> {"cached_evals": int}
+
+# Posições
+pos_id = db.insert_position(pos_dict) -> int
+db.query_positions(min_rating, max_rating, eco, opening_name, player_color, source, limit) -> list
+db.count_positions() -> int
+
+# Resultados de análise
+db.insert_analysis_results_bulk(rows)  # rows: list de (pos_id, concept_key, detected, details, is_error, magnitude)
+db.get_analysis_results(position_id) -> list
+db.concept_error_summary() -> list    # agrega erros por conceito em todos os resultados
+
+db.close()  # ou use como context manager (with Database() as db:)
+```
+
+**Schema SQLite:**
+- `fen_cache (fen, depth, score_cp, best_move, analyzed_at)` — PK: (fen, depth)
+- `positions (id, fen, move_number, move_played, player_color, white, black, white_rating, black_rating, opening, eco, game_url, source, imported_at)`
+- `analysis_results (id, position_id→positions, concept_key, detected, details_json, is_error, error_magnitude, analyzed_at)`
+
 ---
 
-## Passo 4 — modules/pgn_loader.py
+## Pipeline Principal (`main.py`)
+
+Duas funções públicas + `_main(argv=None)` com argparse (testável via `_main(["--user", ...])`):
 
 ```python
-import chess.pgn
-import io
+analyze_player(pgn_path, player_name, player_color=chess.WHITE, on_progress=None)
+# → (profile_dict, diagnosis_dict)
+# Salva output/{player_name}_profile.json e output/{player_name}_diagnosis.json
 
-def load_games_from_file(pgn_path: str) -> list:
-    """
-    Carrega todas as partidas de um arquivo PGN.
-    Retorna lista de objetos chess.pgn.Game.
-    """
-    games = []
-    with open(pgn_path, "r", encoding="utf-8") as f:
-        while True:
-            game = chess.pgn.read_game(f)
-            if game is None:
-                break
-            games.append(game)
-    print(f"[pgn_loader] {len(games)} partidas carregadas de {pgn_path}")
-    return games
-
-
-def load_games_from_string(pgn_string: str) -> list:
-    """
-    Carrega partidas a partir de uma string PGN.
-    Útil para testes sem arquivo.
-    """
-    games = []
-    pgn_io = io.StringIO(pgn_string)
-    while True:
-        game = chess.pgn.read_game(pgn_io)
-        if game is None:
-            break
-        games.append(game)
-    return games
-
-
-def iterate_positions(game, player_color: bool):
-    """
-    Itera sobre todas as posições de uma partida onde é a vez do jogador analisado.
-    Yields: (board_before, move_played, board_after)
-    
-    player_color: chess.WHITE ou chess.BLACK
-    """
-    board = game.board()
-    for move in game.mainline_moves():
-        if board.turn == player_color:
-            board_before = board.copy()
-            board.push(move)
-            board_after = board.copy()
-            yield board_before, move, board_after
-        else:
-            board.push(move)
+analyze_player_from_username(username, n_games=50, on_progress=None)
+# → (profile_dict, diagnosis_dict)
 ```
+
+Sequência interna:
+1. Carrega partidas (PGN ou Chess.com)
+2. Abre **uma única instância** do Stockfish para todas as partidas
+3. Por jogo: `detect_concepts()` em cada posição → `batch_validate()` apenas nas posições com pelo menos um conceito detectado
+4. Persiste tudo no SQLite via `_persist_games_to_db()`
+5. `build_profile()` — aplica `is_instructive()` como gate causal
+6. `diagnose()` — chama Claude, retorna diagnóstico bilíngue
+
+`on_progress(stage, current, total, message)` — callback opcional para a UI do Streamlit
+exibir progresso. Stages: `"fetch"`, `"load"`, `"game"`, `"profile"`, `"ai"`, `"done"`.
 
 ---
 
-## Passo 5 — modules/position_analyzer.py
+## Interface Web (`app.py` + `ui/`)
 
+Arquitetura de **página única com scroll contínuo**. `app.py` chama `render()` de cada
+módulo em sequência, separados por `st.divider()`.
+
+```
+app.py
+ ├── sidebar: seletor de idioma + seletor de perfil ativo + nav links
+ ├── render_home()     → ui/pages/home.py      #home
+ ├── render_analyze()  → ui/pages/analyze.py   #analyze
+ ├── render_profile()  → ui/pages/profile.py   #profile-dashboard
+ ├── render_explorer() → ui/pages/explorer.py  #game-explorer
+ ├── render_diagnosis()→ ui/pages/diagnosis.py #diagnosis-report
+ └── scroll-spy JS: detecta âncora ativa e aplica highlight no nav da sidebar
+```
+
+**Scroll-spy:** `components.html(height=0)` injeta script no frame pai que registra
+listener de scroll em `[data-testid="stMain"]`. Listener idempotente via
+`window.parent._spyListener` / `_spyEl`. Aplica `color:#ff4b4b` + `border-left` ao
+link ativo da sidebar.
+
+**Perfil ativo** (`st.session_state.active_profile`): string com o nome do arquivo
+`{user}_profile.json` em `output/`. Todas as páginas lêem desse estado. O seletor
+na sidebar sincroniza automaticamente.
+
+**i18n (`ui/i18n.py`):**
 ```python
-import chess
-
-def detect_concepts(board: chess.Board, player_color: bool) -> dict:
-    """
-    Detecta conceitos estratégicos presentes numa posição.
-    Retorna dicionário com conceitos detectados e seus detalhes.
-    
-    board: posição ANTES do lance do jogador
-    player_color: cor do jogador sendo analisado
-    """
-    results = {}
-
-    results["weak_square"] = detect_weak_squares(board, player_color)
-    results["open_file"] = detect_open_files(board, player_color)
-    results["isolated_pawn"] = detect_isolated_pawns(board, player_color)
-    results["bishop_pair"] = detect_bishop_pair(board, player_color)
-    results["knight_outpost"] = detect_knight_outpost(board, player_color)
-    results["king_safety"] = detect_king_safety(board, player_color)
-    results["space_advantage"] = detect_space_advantage(board, player_color)
-
-    return results
-
-
-def detect_weak_squares(board: chess.Board, player_color: bool) -> dict:
-    """
-    Detecta casas fracas no campo do jogador (casas que seus peões não defendem).
-    Uma casa fraca é aquela que nenhum peão aliado pode atacar agora ou futuramente.
-    """
-    weak_squares = []
-    opponent_color = not player_color
-
-    for square in chess.SQUARES:
-        file = chess.square_file(square)
-        rank = chess.square_rank(square)
-
-        # Foca no campo do jogador (metade do tabuleiro)
-        if player_color == chess.WHITE and rank < 4:
-            continue
-        if player_color == chess.BLACK and rank > 3:
-            continue
-
-        # Verifica se nenhum peão aliado pode defender essa casa
-        can_be_defended = False
-        for adj_file in [file - 1, file + 1]:
-            if 0 <= adj_file <= 7:
-                for r in range(8):
-                    sq = chess.square(adj_file, r)
-                    piece = board.piece_at(sq)
-                    if piece and piece.piece_type == chess.PAWN and piece.color == player_color:
-                        can_be_defended = True
-                        break
-
-        if not can_be_defended:
-            # Verifica se o adversário tem peça que poderia ocupar essa casa
-            if board.is_attacked_by(opponent_color, square):
-                weak_squares.append(chess.square_name(square))
-
-    return {
-        "detected": len(weak_squares) > 0,
-        "squares": weak_squares,
-        "count": len(weak_squares)
-    }
-
-
-def detect_open_files(board: chess.Board, player_color: bool) -> dict:
-    """
-    Detecta colunas abertas e semi-abertas.
-    Verifica se o jogador tem torres/dama posicionadas para aproveitá-las.
-    """
-    open_files = []
-    semi_open_files = []
-
-    for file_idx in range(8):
-        file_name = chess.FILE_NAMES[file_idx]
-        white_pawn = False
-        black_pawn = False
-
-        for rank_idx in range(8):
-            sq = chess.square(file_idx, rank_idx)
-            piece = board.piece_at(sq)
-            if piece and piece.piece_type == chess.PAWN:
-                if piece.color == chess.WHITE:
-                    white_pawn = True
-                else:
-                    black_pawn = True
-
-        if not white_pawn and not black_pawn:
-            open_files.append(file_name)
-        elif player_color == chess.WHITE and not white_pawn and black_pawn:
-            semi_open_files.append(file_name)
-        elif player_color == chess.BLACK and not black_pawn and white_pawn:
-            semi_open_files.append(file_name)
-
-    # Verifica se o jogador tem torre/dama nessas colunas
-    has_rook_on_open = False
-    for file_name in open_files + semi_open_files:
-        file_idx = chess.FILE_NAMES.index(file_name)
-        for rank_idx in range(8):
-            sq = chess.square(file_idx, rank_idx)
-            piece = board.piece_at(sq)
-            if piece and piece.color == player_color and piece.piece_type in [chess.ROOK, chess.QUEEN]:
-                has_rook_on_open = True
-                break
-
-    return {
-        "detected": len(open_files) > 0 or len(semi_open_files) > 0,
-        "open_files": open_files,
-        "semi_open_files": semi_open_files,
-        "player_has_rook_on_open": has_rook_on_open
-    }
-
-
-def detect_isolated_pawns(board: chess.Board, player_color: bool) -> dict:
-    """
-    Detecta peões isolados do jogador.
-    Peão isolado: sem peões aliados nas colunas adjacentes.
-    """
-    isolated = []
-
-    for square in chess.SQUARES:
-        piece = board.piece_at(square)
-        if not piece or piece.piece_type != chess.PAWN or piece.color != player_color:
-            continue
-
-        file = chess.square_file(square)
-        has_neighbor = False
-
-        for adj_file in [file - 1, file + 1]:
-            if 0 <= adj_file <= 7:
-                for rank in range(8):
-                    sq = chess.square(adj_file, rank)
-                    p = board.piece_at(sq)
-                    if p and p.piece_type == chess.PAWN and p.color == player_color:
-                        has_neighbor = True
-                        break
-
-        if not has_neighbor:
-            isolated.append(chess.square_name(square))
-
-    return {
-        "detected": len(isolated) > 0,
-        "squares": isolated,
-        "count": len(isolated)
-    }
-
-
-def detect_bishop_pair(board: chess.Board, player_color: bool) -> dict:
-    """
-    Detecta se o jogador tem par de bispos enquanto o adversário não.
-    """
-    opponent_color = not player_color
-
-    player_bishops = sum(1 for sq in chess.SQUARES
-                        if board.piece_at(sq) and
-                        board.piece_at(sq).piece_type == chess.BISHOP and
-                        board.piece_at(sq).color == player_color)
-
-    opponent_bishops = sum(1 for sq in chess.SQUARES
-                          if board.piece_at(sq) and
-                          board.piece_at(sq).piece_type == chess.BISHOP and
-                          board.piece_at(sq).color == opponent_color)
-
-    has_pair = player_bishops >= 2
-    opponent_has_pair = opponent_bishops >= 2
-
-    return {
-        "detected": has_pair and not opponent_has_pair,
-        "player_bishops": player_bishops,
-        "opponent_bishops": opponent_bishops
-    }
-
-
-def detect_knight_outpost(board: chess.Board, player_color: bool) -> dict:
-    """
-    Detecta cavalos do jogador em postos avançados (casas fracas no campo adversário).
-    """
-    opponent_color = not player_color
-    outposts = []
-
-    for square in chess.SQUARES:
-        piece = board.piece_at(square)
-        if not piece or piece.piece_type != chess.KNIGHT or piece.color != player_color:
-            continue
-
-        rank = chess.square_rank(square)
-
-        # Cavalo deve estar no campo adversário
-        if player_color == chess.WHITE and rank < 4:
-            continue
-        if player_color == chess.BLACK and rank > 3:
-            continue
-
-        # Casa não pode ser atacada por peões adversários
-        attacked_by_opponent_pawn = False
-        file = chess.square_file(square)
-
-        pawn_attack_ranks = [rank - 1] if player_color == chess.WHITE else [rank + 1]
-        for pr in pawn_attack_ranks:
-            if 0 <= pr <= 7:
-                for pf in [file - 1, file + 1]:
-                    if 0 <= pf <= 7:
-                        sq = chess.square(pf, pr)
-                        p = board.piece_at(sq)
-                        if p and p.piece_type == chess.PAWN and p.color == opponent_color:
-                            attacked_by_opponent_pawn = True
-
-        if not attacked_by_opponent_pawn:
-            outposts.append(chess.square_name(square))
-
-    return {
-        "detected": len(outposts) > 0,
-        "squares": outposts
-    }
-
-
-def detect_king_safety(board: chess.Board, player_color: bool) -> dict:
-    """
-    Avalia a segurança do rei baseada em cobertura de peões.
-    """
-    king_square = board.king(player_color)
-    if king_square is None:
-        return {"detected": False, "exposed": False, "shield_pawns": 0}
-
-    king_file = chess.square_file(king_square)
-    king_rank = chess.square_rank(king_square)
-
-    shield_pawns = 0
-    pawn_ranks = [king_rank + 1] if player_color == chess.WHITE else [king_rank - 1]
-
-    for pf in range(max(0, king_file - 1), min(8, king_file + 2)):
-        for pr in pawn_ranks:
-            if 0 <= pr <= 7:
-                sq = chess.square(pf, pr)
-                p = board.piece_at(sq)
-                if p and p.piece_type == chess.PAWN and p.color == player_color:
-                    shield_pawns += 1
-
-    # Rei está exposto se tiver menos de 2 peões de escudo e ainda não roque
-    has_castled = (player_color == chess.WHITE and king_file in [6, 2]) or \
-                  (player_color == chess.BLACK and king_file in [6, 2])
-    exposed = shield_pawns < 2
-
-    return {
-        "detected": exposed,
-        "exposed": exposed,
-        "shield_pawns": shield_pawns,
-        "king_square": chess.square_name(king_square),
-        "has_castled_position": has_castled
-    }
-
-
-def detect_space_advantage(board: chess.Board, player_color: bool) -> dict:
-    """
-    Calcula vantagem de espaço baseada em casas controladas no campo adversário.
-    """
-    opponent_color = not player_color
-    player_space = 0
-    opponent_space = 0
-
-    for square in chess.SQUARES:
-        rank = chess.square_rank(square)
-
-        # Espaço no campo adversário (ranks 5-7 para brancas, 0-2 para pretas)
-        if player_color == chess.WHITE and rank >= 4:
-            if board.is_attacked_by(player_color, square):
-                player_space += 1
-        elif player_color == chess.BLACK and rank <= 3:
-            if board.is_attacked_by(player_color, square):
-                player_space += 1
-
-        if opponent_color == chess.WHITE and rank >= 4:
-            if board.is_attacked_by(opponent_color, square):
-                opponent_space += 1
-        elif opponent_color == chess.BLACK and rank <= 3:
-            if board.is_attacked_by(opponent_color, square):
-                opponent_space += 1
-
-    advantage = player_space - opponent_space
-
-    return {
-        "detected": advantage > 5,
-        "player_space": player_space,
-        "opponent_space": opponent_space,
-        "advantage": advantage
-    }
+t("chave")                # retorna string no idioma atual (st.session_state.lang)
+t("chave", param=valor)   # com interpolação
+# 85 chaves, EN e PT-BR simétricas
+# Idioma: st.radio com key="lang" → persiste em session_state
 ```
 
 ---
 
-## Passo 6 — modules/stockfish_validator.py
+## Módulo Não Integrado
 
-```python
-import chess
-import chess.engine
-from config import STOCKFISH_PATH, STOCKFISH_DEPTH, ERROR_THRESHOLD_CP
-
-
-def validate_move(board_before: chess.Board, move_played: chess.Move) -> dict:
-    """
-    Usa o Stockfish para validar se o lance jogado foi um erro.
-    
-    Compara a avaliação ANTES do lance (melhor lance possível) com a avaliação
-    DEPOIS do lance jogado. Se a diferença superar ERROR_THRESHOLD_CP, é um erro.
-    
-    Retorna dicionário com:
-    - is_error: bool
-    - eval_before: centipawns antes (melhor lance)
-    - eval_after: centipawns depois (lance jogado)
-    - error_magnitude: diferença em centipawns
-    - best_move: melhor lance segundo Stockfish
-    """
-    engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
-
-    try:
-        # Avaliação da posição ANTES — pega o melhor lance
-        info_before = engine.analyse(board_before, chess.engine.Limit(depth=STOCKFISH_DEPTH))
-        score_before = info_before["score"].white().score(mate_score=10000)
-        best_move = info_before["pv"][0] if "pv" in info_before else None
-
-        # Posição DEPOIS do lance jogado
-        board_after = board_before.copy()
-        board_after.push(move_played)
-        info_after = engine.analyse(board_after, chess.engine.Limit(depth=STOCKFISH_DEPTH))
-        score_after = info_after["score"].white().score(mate_score=10000)
-
-        # Para o jogador de pretas, a perspectiva é invertida
-        if board_before.turn == chess.BLACK:
-            error_magnitude = score_after - score_before  # positivo = piorou para pretas
-        else:
-            error_magnitude = score_before - score_after  # positivo = piorou para brancas
-
-        is_error = error_magnitude > ERROR_THRESHOLD_CP
-
-        return {
-            "is_error": is_error,
-            "eval_before": score_before,
-            "eval_after": score_after,
-            "error_magnitude": error_magnitude,
-            "best_move": best_move.uci() if best_move else None
-        }
-
-    finally:
-        engine.quit()
-
-
-def batch_validate(positions: list) -> list:
-    """
-    Valida múltiplas posições reutilizando a mesma instância do Stockfish.
-    positions: lista de (board_before, move_played)
-    Retorna lista de dicts com resultados.
-    """
-    engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
-    results = []
-
-    try:
-        for board_before, move_played in positions:
-            info_before = engine.analyse(board_before, chess.engine.Limit(depth=STOCKFISH_DEPTH))
-            score_before = info_before["score"].white().score(mate_score=10000)
-            best_move = info_before["pv"][0] if "pv" in info_before else None
-
-            board_after = board_before.copy()
-            board_after.push(move_played)
-            info_after = engine.analyse(board_after, chess.engine.Limit(depth=STOCKFISH_DEPTH))
-            score_after = info_after["score"].white().score(mate_score=10000)
-
-            if board_before.turn == chess.BLACK:
-                error_magnitude = score_after - score_before
-            else:
-                error_magnitude = score_before - score_after
-
-            results.append({
-                "is_error": error_magnitude > ERROR_THRESHOLD_CP,
-                "eval_before": score_before,
-                "eval_after": score_after,
-                "error_magnitude": error_magnitude,
-                "best_move": best_move.uci() if best_move else None
-            })
-
-    finally:
-        engine.quit()
-
-    return results
-```
+**`modules/fen_fetcher.py`** — busca posições FEN do Chess.com com filtros ricos
+(min/max_rating, ECO, opening_name, move_range, time_class). Usado apenas por
+`eval_fen.py` (debug). Não faz parte do pipeline principal, mas a interface é
+compatível com `db.py` (`insert_positions_bulk`).
 
 ---
 
-## Passo 7 — modules/profile_builder.py
+## Base de Conhecimento (`data/silman_concepts.json`)
 
-```python
-import json
-from config import MIN_OCCURRENCES
-
-
-def build_profile(games_data: list) -> dict:
-    """
-    Constrói o perfil de fraquezas do jogador a partir dos dados de todas as partidas.
-    
-    games_data: lista de dicts com:
-        - game_id
-        - positions: lista de dicts com concepts_detected + stockfish_validation
-    
-    Retorna perfil com contagens, aproveitamento e padrões.
-    """
-    concept_stats = {}
-    total_positions = 0
-    total_errors = 0
-
-    for game in games_data:
-        for position in game["positions"]:
-            total_positions += 1
-            validation = position["stockfish_validation"]
-            concepts = position["concepts_detected"]
-
-            if validation["is_error"]:
-                total_errors += 1
-
-                # Registra quais conceitos estavam presentes quando houve erro
-                for concept_key, concept_data in concepts.items():
-                    if concept_data.get("detected", False):
-                        if concept_key not in concept_stats:
-                            concept_stats[concept_key] = {
-                                "total_occurrences": 0,
-                                "error_occurrences": 0,
-                                "total_error_magnitude": 0,
-                                "positions": []
-                            }
-                        concept_stats[concept_key]["error_occurrences"] += 1
-                        concept_stats[concept_key]["total_error_magnitude"] += validation["error_magnitude"]
-                        concept_stats[concept_key]["positions"].append({
-                            "game_id": game["game_id"],
-                            "fen": position.get("fen"),
-                            "error_magnitude": validation["error_magnitude"]
-                        })
-            else:
-                # Registra ocorrências sem erro também (para calcular aproveitamento)
-                for concept_key, concept_data in concepts.items():
-                    if concept_data.get("detected", False):
-                        if concept_key not in concept_stats:
-                            concept_stats[concept_key] = {
-                                "total_occurrences": 0,
-                                "error_occurrences": 0,
-                                "total_error_magnitude": 0,
-                                "positions": []
-                            }
-                        concept_stats[concept_key]["total_occurrences"] += 1
-
-    # Calcula métricas finais e filtra por relevância
-    weaknesses = []
-    for concept_key, stats in concept_stats.items():
-        total_occ = stats["total_occurrences"] + stats["error_occurrences"]
-        error_rate = stats["error_occurrences"] / total_occ if total_occ > 0 else 0
-        avg_error = stats["total_error_magnitude"] / stats["error_occurrences"] if stats["error_occurrences"] > 0 else 0
-
-        if stats["error_occurrences"] >= MIN_OCCURRENCES:
-            weaknesses.append({
-                "concept": concept_key,
-                "total_occurrences": total_occ,
-                "error_occurrences": stats["error_occurrences"],
-                "error_rate": round(error_rate, 3),
-                "avg_error_magnitude_cp": round(avg_error, 1),
-                "sample_positions": stats["positions"][:3]  # máximo 3 exemplos
-            })
-
-    # Ordena por número de erros (mais frequente primeiro)
-    weaknesses.sort(key=lambda x: x["error_occurrences"], reverse=True)
-
-    return {
-        "total_games": len(games_data),
-        "total_positions_analyzed": total_positions,
-        "total_errors_detected": total_errors,
-        "overall_error_rate": round(total_errors / total_positions, 3) if total_positions > 0 else 0,
-        "weaknesses": weaknesses
-    }
-
-
-def save_profile(profile: dict, path: str):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(profile, f, indent=2, ensure_ascii=False)
-    print(f"[profile_builder] Perfil salvo em {path}")
-
-
-def load_profile(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+17 conceitos extraídos manualmente de *The Amateur's Mind*. Cada entrada:
+```json
+{
+  "id": "weak_square",
+  "name": "Casa Fraca",
+  "silman_chapter": 3,
+  "silman_page": 67,
+  "silman_category": "desequilíbrios estáticos",
+  "description": "...",
+  "strategic_implications": "...",
+  "detection_key": "weak_square"
+}
 ```
+
+Os 3 conceitos adicionados após os 14 originais:
+- `hanging_piece` — "Peça Pendurada", cap. 1 p. 26, categoria dinâmica
+- `backward_pawn` — "Peão Atrasado", cap. 5 p. 109, estrutura de peões
+- `center_control` — "Controle do Centro", cap. 2 p. 35, desequilíbrios estáticos
 
 ---
 
-## Passo 8 — modules/ai_diagnostician.py
+## Testes
 
-```python
-import json
-import anthropic
-from config import ANTHROPIC_API_KEY
-
-
-def load_silman_concepts(path: str = "data/silman_concepts.json") -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return {c["detection_key"]: c for c in data["concepts"]}
-
-
-def diagnose(player_profile: dict, silman_concepts: dict) -> dict:
-    """
-    Usa o Claude para identificar a causa raiz das fraquezas recorrentes.
-    
-    O LLM recebe os dados quantitativos brutos e deve:
-    1. Identificar o padrão subjacente (causa raiz)
-    2. Classificar as fraquezas detectadas em primárias e secundárias
-    3. Determinar quais fraquezas são sintomas de um problema maior
-    4. Indicar prioridade de estudo no Silman
-    
-    Retorna JSON estruturado com o diagnóstico.
-    """
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    # Prepara dados das fraquezas com contexto do Silman
-    weaknesses_with_context = []
-    for weakness in player_profile["weaknesses"]:
-        concept_key = weakness["concept"]
-        silman_info = silman_concepts.get(concept_key, {})
-        weaknesses_with_context.append({
-            **weakness,
-            "silman_name": silman_info.get("name", concept_key),
-            "silman_chapter": silman_info.get("silman_chapter"),
-            "silman_category": silman_info.get("silman_category"),
-            "silman_implications": silman_info.get("strategic_implications")
-        })
-
-    profile_summary = {
-        "total_games": player_profile["total_games"],
-        "total_positions_analyzed": player_profile["total_positions_analyzed"],
-        "overall_error_rate": player_profile["overall_error_rate"],
-        "weaknesses": weaknesses_with_context
-    }
-
-    prompt = f"""
-Você é um analista de xadrez especializado em diagnóstico pedagógico estratégico.
-
-Abaixo estão dados quantitativos brutos do perfil de fraquezas de um jogador,
-coletados a partir da análise de {player_profile["total_games"]} partidas reais.
-
-Sua tarefa NÃO é escrever um texto explicativo. É realizar um diagnóstico técnico
-identificando padrões causais por trás dos sintomas detectados.
-
-DADOS DO JOGADOR:
-{json.dumps(profile_summary, indent=2, ensure_ascii=False)}
-
-INSTRUÇÕES:
-1. Analise as fraquezas e identifique se existe um padrão raiz que as conecta
-   (ex: "pensamento estático", "ignorar desequilíbrios dinâmicos", "foco excessivo em tática")
-2. Classifique cada fraqueza como: PRIMARY (causa principal), SECONDARY (sintoma de outra), NOISE (pouco relevante)
-3. Determine a prioridade de estudo no Silman com base na causa raiz
-4. Seja específico sobre o que o jogador NÃO está percebendo nas posições
-
-Responda APENAS com JSON válido, sem texto antes ou depois:
-
-{{
-  "root_cause": {{
-    "id": "identificador_snake_case",
-    "name": "Nome do padrão identificado",
-    "description": "Descrição técnica precisa do problema cognitivo/estratégico central"
-  }},
-  "weakness_classification": [
-    {{
-      "concept": "detection_key do conceito",
-      "classification": "PRIMARY|SECONDARY|NOISE",
-      "reasoning": "Por que essa classificação"
-    }}
-  ],
-  "study_priority": [
-    {{
-      "concept": "detection_key",
-      "silman_chapter": 0,
-      "priority_rank": 1,
-      "reason": "Por que estudar isso primeiro"
-    }}
-  ],
-  "cognitive_pattern": "Descrição do padrão de pensamento que o jogador deve mudar",
-  "confidence": "HIGH|MEDIUM|LOW"
-}}
-"""
-
-    response = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    raw = response.content[0].text.strip()
-
-    # Remove markdown code fences se presentes
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
-
-    diagnosis = json.loads(raw)
-
-    # Enriquece o resultado com dados do Silman
-    for item in diagnosis.get("study_priority", []):
-        concept_key = item.get("concept")
-        if concept_key in silman_concepts:
-            sc = silman_concepts[concept_key]
-            item["silman_name"] = sc.get("name")
-            item["silman_page"] = sc.get("silman_page")
-            item["silman_description"] = sc.get("description")
-
-    return diagnosis
-```
-
----
-
-## Passo 9 — main.py
-
-```python
-import chess
-import json
-import os
-from modules.pgn_loader import load_games_from_file, iterate_positions
-from modules.position_analyzer import detect_concepts
-from modules.stockfish_validator import batch_validate
-from modules.profile_builder import build_profile, save_profile
-from modules.ai_diagnostician import diagnose, load_silman_concepts
-
-OUTPUT_DIR = "output"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-
-def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.WHITE):
-    """
-    Pipeline completo de análise de um jogador.
-    
-    pgn_path: caminho para o arquivo PGN com as partidas
-    player_name: nome do jogador (para identificação)
-    player_color: chess.WHITE ou chess.BLACK
-    """
-    print(f"\n=== Iniciando análise de {player_name} ===\n")
-
-    # 1. Carrega partidas
-    games = load_games_from_file(pgn_path)
-
-    # 2. Para cada partida, coleta posições e dados
-    games_data = []
-    for i, game in enumerate(games):
-        print(f"[main] Processando partida {i + 1}/{len(games)}...")
-        game_positions = []
-        positions_to_validate = []
-
-        for board_before, move_played, board_after in iterate_positions(game, player_color):
-            concepts = detect_concepts(board_before, player_color)
-            positions_to_validate.append((board_before.copy(), move_played))
-            game_positions.append({
-                "fen": board_before.fen(),
-                "move_played": move_played.uci(),
-                "concepts_detected": concepts,
-                "stockfish_validation": None  # preenchido depois
-            })
-
-        # Valida todas as posições da partida em batch (1 instância do Stockfish)
-        validations = batch_validate(positions_to_validate)
-        for j, validation in enumerate(validations):
-            game_positions[j]["stockfish_validation"] = validation
-
-        games_data.append({
-            "game_id": f"game_{i + 1}",
-            "positions": game_positions
-        })
-
-    # 3. Constrói perfil de fraquezas
-    print("\n[main] Construindo perfil de fraquezas...")
-    profile = build_profile(games_data)
-    save_profile(profile, f"{OUTPUT_DIR}/{player_name}_profile.json")
-
-    print(f"\n[main] Resumo do perfil:")
-    print(f"  Partidas analisadas: {profile['total_games']}")
-    print(f"  Posições analisadas: {profile['total_positions_analyzed']}")
-    print(f"  Taxa de erro global: {profile['overall_error_rate'] * 100:.1f}%")
-    print(f"  Fraquezas recorrentes: {len(profile['weaknesses'])}")
-    for w in profile["weaknesses"]:
-        print(f"    - {w['concept']}: {w['error_occurrences']} erros ({w['error_rate']*100:.0f}% das ocorrências)")
-
-    # 4. Diagnóstico pela IA
-    print("\n[main] Executando diagnóstico por IA...")
-    silman_concepts = load_silman_concepts()
-    diagnosis = diagnose(profile, silman_concepts)
-
-    diagnosis_path = f"{OUTPUT_DIR}/{player_name}_diagnosis.json"
-    with open(diagnosis_path, "w", encoding="utf-8") as f:
-        json.dump(diagnosis, f, indent=2, ensure_ascii=False)
-
-    print(f"\n=== DIAGNÓSTICO FINAL ===")
-    print(f"Causa raiz: {diagnosis['root_cause']['name']}")
-    print(f"Descrição: {diagnosis['root_cause']['description']}")
-    print(f"Confiança: {diagnosis['confidence']}")
-    print(f"\nPrioridade de estudo (Silman):")
-    for item in diagnosis.get("study_priority", []):
-        print(f"  #{item['priority_rank']} — {item.get('silman_name', item['concept'])} "
-              f"(Capítulo {item.get('silman_chapter', '?')}, p.{item.get('silman_page', '?')})")
-        print(f"     Motivo: {item['reason']}")
-
-    print(f"\nArquivos salvos em '{OUTPUT_DIR}/'")
-    return profile, diagnosis
-
-
-if __name__ == "__main__":
-    # Exemplo de uso — ajustar pgn_path e player_name
-    analyze_player(
-        pgn_path="partidas.pgn",
-        player_name="sprandel",
-        player_color=chess.WHITE
-    )
-```
-
----
-
-## Passo 10 — .env (criar na raiz do projeto)
-
-```
-ANTHROPIC_API_KEY=sua_chave_aqui
-```
-
----
-
-## Instruções de Execução
-
-1. Criar toda a estrutura de diretórios e arquivos acima
-2. Instalar dependências: `pip install -r requirements.txt`
-3. Criar o arquivo `.env` com a chave da API Anthropic
-4. Ajustar `STOCKFISH_PATH` em `config.py` para o caminho real
-5. Preencher `data/silman_concepts.json` com os conceitos extraídos do livro
-
-### Via CLI
 ```bash
-# Busca as últimas N partidas do Chess.com
-python main.py --user <username> --games 50
-
-# Analisa um arquivo PGN local
-python main.py --user <username> --pgn partidas.pgn --color white
+pytest                                  # 189 testes, todos passando
+pytest -v --tb=short
+pytest tests/test_position_analyzer.py  # 59 testes com FENs conhecidas
+pytest tests/test_pipeline_e2e.py -v    # integração real (requer Stockfish)
 ```
 
-### Via Interface Web
-```bash
-streamlit run app.py
-```
-Acessa `http://localhost:8501` e usa o menu lateral para navegar entre as páginas.
+Cobertura por arquivo:
+
+| Arquivo | Testes | Escopo |
+|---------|--------|--------|
+| `test_position_analyzer.py` | 59 | FENs específicas para cada um dos 17 detectores |
+| `test_app.py` | 15 | AppTest: startup, i18n, estado vazio, fixture com perfil |
+| `test_pipeline_e2e.py` | 13 | Integração real Stockfish; `@skip_no_sf` se binário ausente |
+| `test_stockfish_validator.py` | 11 | Mock `popen_uci`, cache via `_get_db` |
+| `test_pgn_loader.py` | 11 | Parsing PGN, iteração de posições |
+| `test_cli.py` | 11 | `_main(argv=...)`, roteamento pgn vs username, flags |
+| `test_chess_com_loader.py` | 11 | Mock HTTP, detecção de cor, limite n_games |
+| `test_profile_builder.py` | 10 | `make_position()` com `best_move=None` bypassa `is_instructive` |
+| `test_main.py` | 10 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games` |
+| `test_concept_relevance.py` | 10 | Gates causais, scoring por conceito |
+| `test_ai_diagnostician.py` | 9 | Mock cliente Anthropic, formato bilíngue EN/PT |
+| `test_diagnosis_card.py` | 6 | `format_root_cause`, `format_weakness_table`, `format_study_priority` |
+| `test_weakness_chart.py` | 6 | Figuras Plotly, ordenação, lista vazia |
+| `test_config.py` | 4 | Valores e tipos dos thresholds |
+| `test_ui_dependencies.py` | 3 | Importabilidade dos módulos UI |
 
 ---
 
-## Notas Acadêmicas (para o TCC)
+## Validação com Dados Reais
 
-- O sistema implementa uma arquitetura híbrida de três camadas: detecção determinística (python-chess), validação quantitativa (Stockfish) e raciocínio causal (LLM)
-- O LLM não gera texto pedagógico — ele atua como componente de raciocínio que classifica e interpreta dados quantitativos brutos
-- A base de conhecimento do Silman (`silman_concepts.json`) é extraída manualmente, preservando a fidelidade interpretativa e o contexto pedagógico original
-- A validação do sistema usa posições externas (Lichess/Chess.com) não vistas durante o desenvolvimento
+Três jogadores processados pelo pipeline (2026-05-13):
+
+| Jogador | Rating (blitz) | Partidas | Posições | Taxa de erro | Fraquezas |
+|---------|---------------|----------|----------|-------------|-----------|
+| diogenesdie | ~519 rapid | 30 | 985 | 32,8% | 10 |
+| sprandel1 | ~1295 blitz | 30 | 1.119 | 26,1% | 7 |
+| Sprandel27 | ~1555 rapid | 20 | 527 | 21,8% | 3 |
+
+Observações:
+- Taxa de erro inversamente proporcional ao rating (32,8% → 26,1% → 21,8%)
+- `hanging_piece` domina o perfil mais baixo (29 erros); ausente nos dois mais altos
+- `king_safety` e `overloaded_piece` recorrentes nos 3 perfis
+- Diagnósticos Claude com confiança HIGH nos 3 casos; causas raiz distintas e coerentes
 
 ---
 
-## Changelog de Melhorias
+## Notas Acadêmicas (TCC)
 
-### Performance do Pipeline (stockfish_validator.py, main.py)
-- **Instância única do Stockfish:** o engine agora é aberto uma vez para todas as partidas e fechado ao final, eliminando o custo de startup por partida (~0.5s × N partidas economizados).
-- **Skip de posições sem conceito:** posições onde nenhum conceito Silman foi detectado são ignoradas pelo Stockfish, reduzindo em 30–60% o número de análises.
-- **Profundidade reduzida:** `STOCKFISH_DEPTH` alterado de 15 para 10. Suficiente para detectar erros estratégicos significativos com velocidade ~2–4× maior.
-- **`open_engine()`:** nova função pública em `stockfish_validator.py` para criação explícita do engine, usada pelo pipeline principal.
-- **`batch_validate(engine=None)`:** aceita um engine externo opcional, criando e destruindo o seu próprio apenas quando necessário.
-
-### Correção de Falsos Positivos (stockfish_validator.py)
-- Se o lance jogado pelo jogador é idêntico ao melhor lance do Stockfish, `is_error` é forçado a `False` independentemente da diferença de centipawns entre as duas análises independentes (efeito horizonte em profundidade fixa).
-
-### Integração com Chess.com (modules/chess_com_loader.py)
-- **`fetch_recent_games(username, n_games=50)`:** substituída a lógica de "N meses" por "N partidas". Os arquivos mensais são percorridos do mais recente para o mais antigo e a coleta para assim que `n_games` partidas válidas são encontradas. Isso evita volumes imprevisíveis de dados para jogadores ativos.
-- A CLI usa `--games N` (antes `--months N`).
-
-### Filtragem de Posições Instrutivas (modules/concept_relevance.py)
-- Novo módulo `concept_relevance.py` com `is_instructive(board, move_played, best_move, concept_key, player_color)`.
-- Para cada conceito, define uma função de score numérico que mede a qualidade da posição do jogador em relação àquele conceito após o lance (ex: menos casas fracas = score maior).
-- Uma posição só é salva como exemplo no perfil se o melhor lance produce um score estritamente melhor que o lance jogado — estabelecendo vínculo causal entre o erro e o conceito Silman, em vez de mera co-ocorrência.
-
-### Dados Enriquecidos no Perfil (profile_builder.py, main.py)
-- `sample_positions` agora inclui: `move_played`, `best_move`, `white`, `black`, `player_color`.
-- Permite ao explorador de partidas exibir os lances e orientar o tabuleiro corretamente.
-
-### Interface Web Streamlit (app.py, ui/)
-A interface é lançada com `streamlit run app.py` e oferece quatro páginas:
-
-| Página | Arquivo | Descrição |
-|--------|---------|-----------|
-| Home | `ui/pages/0_home.py` | Página inicial com navegação |
-| Analyze | `ui/pages/1_analyze.py` | Formulário Chess.com ou upload PGN; dispara análise ou carrega perfil salvo |
-| Profile Dashboard | `ui/pages/2_profile.py` | Seletor de perfil, métricas, gráficos Plotly de erros por conceito |
-| Game Explorer | `ui/pages/3_explorer.py` | Tabuleiro SVG com setas (🔴 lance jogado, 🟢 melhor lance), nomes dos jogadores nas posições corretas, orientação por cor |
-| Diagnosis Report | `ui/pages/4_diagnosis.py` | Causa raiz, classificação PRIMARY/SECONDARY/NOISE, plano de estudo Silman |
-
-**Componentes auxiliares:**
-- `ui/components/weakness_chart.py`: gráficos Plotly (`build_error_count_chart`, `build_error_magnitude_chart`)
-- `ui/components/diagnosis_card.py`: formatação do diagnóstico (`format_root_cause`, `format_weakness_table`, `format_study_priority`)
+- Arquitetura híbrida de três camadas: detecção determinística → validação quantitativa → raciocínio causal
+- O LLM não gera texto pedagógico — atua como componente de raciocínio que classifica dados quantitativos brutos
+- `is_instructive()` estabelece vínculo causal entre erro e conceito (vs. mera co-ocorrência)
+- A base de conhecimento do Silman é extraída manualmente para preservar fidelidade interpretativa
+- Diagnóstico bilíngue (EN/PT-BR) via uma única chamada à API, retrocompatível com arquivos legacy
+- Validação com jogadores reais do Chess.com em faixas de rating 400–1600

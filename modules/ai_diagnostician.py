@@ -1,6 +1,47 @@
 import json
+import time
 import anthropic
-from config import ANTHROPIC_API_KEY
+from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_MAX_TOKENS
+
+# Quantas vezes reenviar a requisição em erros transitórios (rate limit / 5xx / conexão)
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0  # segundos; backoff exponencial
+
+
+def _extract_json(raw: str) -> dict:
+    """
+    Extrai o objeto JSON da resposta do modelo de forma robusta.
+
+    Lida com texto cercado por blocos markdown (```json ... ```), com ou sem
+    a tag de linguagem, e com texto extra antes/depois. Levanta ValueError com
+    um trecho da resposta caso não seja possível parsear.
+    """
+    text = raw.strip()
+
+    # Remove cerca de código markdown se presente em qualquer posição
+    if "```" in text:
+        parts = text.split("```")
+        # O conteúdo entre o primeiro e o segundo ``` é o bloco de código
+        if len(parts) >= 2:
+            text = parts[1]
+            if text.lstrip().lower().startswith("json"):
+                text = text.lstrip()[4:]
+    text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Fallback: recorta do primeiro '{' ao último '}'
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+        snippet = raw[:300].replace("\n", " ")
+        raise ValueError(
+            f"Resposta da IA não é um JSON válido. Início da resposta: {snippet!r}"
+        )
 
 
 def load_silman_concepts(path: str = "data/silman_concepts.json") -> dict:
@@ -25,6 +66,12 @@ def diagnose(player_profile: dict, silman_concepts: dict) -> dict:
 
     Retorna JSON estruturado com o diagnóstico.
     """
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY não configurada. Defina-a no arquivo .env "
+            "(veja .env.example) antes de rodar o diagnóstico da IA."
+        )
+
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     weaknesses_with_context = []
@@ -47,75 +94,131 @@ def diagnose(player_profile: dict, silman_concepts: dict) -> dict:
     }
 
     prompt = f"""
-Você é um analista de xadrez especializado em diagnóstico pedagógico estratégico.
+You are a chess analyst specialized in strategic pedagogical diagnosis.
 
-Abaixo estão dados quantitativos brutos do perfil de fraquezas de um jogador,
-coletados a partir da análise de {player_profile["total_games"]} partidas reais.
+Below are raw quantitative data from a player's weakness profile,
+collected from the analysis of {player_profile["total_games"]} real games.
 
-Sua tarefa NÃO é escrever um texto explicativo. É realizar um diagnóstico técnico
-identificando padrões causais por trás dos sintomas detectados.
+Your task is NOT to write explanatory text. It is to perform a technical diagnosis
+identifying causal patterns behind the detected symptoms.
 
-DADOS DO JOGADOR:
+PLAYER DATA:
 {json.dumps(profile_summary, indent=2, ensure_ascii=False)}
 
-INSTRUÇÕES:
-1. Analise as fraquezas e identifique se existe um padrão raiz que as conecta
-2. Classifique cada fraqueza como: PRIMARY (causa principal), SECONDARY (sintoma de outra), NOISE (pouco relevante)
-3. Determine a prioridade de estudo no Silman com base na causa raiz
-4. Seja específico sobre o que o jogador NÃO está percebendo nas posições
+INSTRUCTIONS:
+1. Analyze the weaknesses and identify whether a root pattern connects them
+2. Classify each weakness as: PRIMARY (main cause), SECONDARY (symptom of another), NOISE (low relevance)
+3. Determine the Silman study priority based on the root cause
+4. Be specific about what the player is NOT perceiving in the positions
 
-Responda APENAS com JSON válido, sem texto antes ou depois:
+Respond ONLY with valid JSON containing both "en" (English) and "pt" (Brazilian Portuguese)
+translations of all descriptive text. No text before or after the JSON.
+
+Structural fields (MUST be identical in both languages):
+  root_cause.id, weakness_classification[].concept, weakness_classification[].classification,
+  study_priority[].concept, study_priority[].silman_chapter, study_priority[].priority_rank,
+  confidence
+
+Free-text fields (translate appropriately for each language):
+  root_cause.name, root_cause.description, weakness_classification[].reasoning,
+  study_priority[].reason, cognitive_pattern
 
 {{
-  "root_cause": {{
-    "id": "identificador_snake_case",
-    "name": "Nome do padrão identificado",
-    "description": "Descrição técnica precisa do problema cognitivo/estratégico central"
+  "en": {{
+    "root_cause": {{
+      "id": "snake_case_identifier",
+      "name": "Name of the identified pattern",
+      "description": "Precise technical description of the central cognitive/strategic problem"
+    }},
+    "weakness_classification": [
+      {{
+        "concept": "detection_key",
+        "classification": "PRIMARY|SECONDARY|NOISE",
+        "reasoning": "Why this classification"
+      }}
+    ],
+    "study_priority": [
+      {{
+        "concept": "detection_key",
+        "silman_chapter": 0,
+        "priority_rank": 1,
+        "reason": "Why study this first"
+      }}
+    ],
+    "cognitive_pattern": "Description of the thinking pattern the player must change",
+    "confidence": "HIGH|MEDIUM|LOW"
   }},
-  "weakness_classification": [
-    {{
-      "concept": "detection_key do conceito",
-      "classification": "PRIMARY|SECONDARY|NOISE",
-      "reasoning": "Por que essa classificação"
-    }}
-  ],
-  "study_priority": [
-    {{
-      "concept": "detection_key",
-      "silman_chapter": 0,
-      "priority_rank": 1,
-      "reason": "Por que estudar isso primeiro"
-    }}
-  ],
-  "cognitive_pattern": "Descrição do padrão de pensamento que o jogador deve mudar",
-  "confidence": "HIGH|MEDIUM|LOW"
+  "pt": {{
+    "root_cause": {{
+      "id": "snake_case_identifier",
+      "name": "Nome do padrão identificado",
+      "description": "Descrição técnica precisa do problema cognitivo/estratégico central"
+    }},
+    "weakness_classification": [
+      {{
+        "concept": "detection_key",
+        "classification": "PRIMARY|SECONDARY|NOISE",
+        "reasoning": "Por que essa classificação"
+      }}
+    ],
+    "study_priority": [
+      {{
+        "concept": "detection_key",
+        "silman_chapter": 0,
+        "priority_rank": 1,
+        "reason": "Por que estudar isso primeiro"
+      }}
+    ],
+    "cognitive_pattern": "Descrição do padrão de pensamento que o jogador deve mudar",
+    "confidence": "HIGH|MEDIUM|LOW"
+  }}
 }}
 """
 
-    response = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    # Chamada à API com retry em erros transitórios (rate limit, 5xx, conexão)
+    response = None
+    last_error = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=ANTHROPIC_MAX_TOKENS,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except (anthropic.RateLimitError, anthropic.APIConnectionError,
+                anthropic.InternalServerError) as e:
+            last_error = e
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+    if response is None:
+        raise RuntimeError(
+            f"Falha ao chamar a API da Anthropic após {_MAX_RETRIES} tentativas: {last_error}"
+        )
 
-    raw = response.content[0].text.strip()
+    # Extrai o texto da resposta, validando que há um bloco de texto.
+    # (blocos de texto têm .text como string; blocos de tool_use não.)
+    text_blocks = [t for b in response.content
+                   if isinstance((t := getattr(b, "text", None)), str)]
+    if not text_blocks:
+        raise ValueError("Resposta da IA não contém nenhum bloco de texto.")
+    raw = text_blocks[0]
 
-    # Remove markdown code fences se presentes
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+    diagnosis = _extract_json(raw)
 
-    diagnosis = json.loads(raw)
+    if not isinstance(diagnosis, dict) or not diagnosis:
+        raise ValueError("Diagnóstico da IA tem formato inesperado (não é um objeto JSON).")
 
-    # Enriquece o resultado com dados do Silman
-    for item in diagnosis.get("study_priority", []):
-        concept_key = item.get("concept")
-        if concept_key in silman_concepts:
-            sc = silman_concepts[concept_key]
-            item["silman_name"] = sc.get("name")
-            item["silman_page"] = sc.get("silman_page")
-            item["silman_description"] = sc.get("description")
+    # Enrich both language sections with Silman metadata (page numbers, descriptions)
+    for lang_data in diagnosis.values():
+        if not isinstance(lang_data, dict):
+            continue
+        for item in lang_data.get("study_priority", []):
+            concept_key = item.get("concept")
+            if concept_key in silman_concepts:
+                sc = silman_concepts[concept_key]
+                item["silman_name"] = sc.get("name")
+                item["silman_page"] = sc.get("silman_page")
+                item["silman_description"] = sc.get("description")
 
     return diagnosis

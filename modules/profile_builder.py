@@ -1,7 +1,34 @@
 import json
 import chess
-from config import MIN_OCCURRENCES
+from config import MIN_OCCURRENCES, MAX_STAT_CP
 from modules.concept_relevance import is_instructive
+
+
+def _player_eval(validation: dict, key: str, player_color_bool: bool) -> float:
+    """Returns the eval at a given key (eval_before/eval_after) from the player's perspective."""
+    raw = validation.get(key, 0)
+    return raw if player_color_bool else -raw
+
+
+def _is_missed_checkmate(validation: dict, player_color_bool: bool) -> bool:
+    """True when the player had a forced mate available (eval >= 9000 cp) but didn't take it."""
+    if not validation.get("is_error"):
+        return False
+    return _player_eval(validation, "eval_before", player_color_bool) >= 9000
+
+
+def _is_allowed_checkmate(validation: dict, player_color_bool: bool) -> bool:
+    """True when the opponent has or gets a forced mate in the position (eval <= -9000 cp for player).
+
+    Covers two cases:
+      - Player was already in a forced mate before their move (position was tactically lost).
+      - Player's move handed the opponent a forced mate (the blunder that loses by mate).
+    """
+    if not validation.get("is_error"):
+        return False
+    before = _player_eval(validation, "eval_before", player_color_bool)
+    after  = _player_eval(validation, "eval_after",  player_color_bool)
+    return before <= -9000 or after <= -9000
 
 
 def build_profile(games_data: list) -> dict:
@@ -17,49 +44,66 @@ def build_profile(games_data: list) -> dict:
     concept_stats = {}
     total_positions = 0
     total_errors = 0
+    total_missed_checkmates = 0
+    total_allowed_checkmates = 0
 
     for game in games_data:
         for position in game["positions"]:
             total_positions += 1
             validation = position["stockfish_validation"]
             concepts = position["concepts_detected"]
+            player_color_bool = game.get("player_color", "white") == "white"
 
             if validation["is_error"]:
                 total_errors += 1
 
+                if _is_missed_checkmate(validation, player_color_bool):
+                    total_missed_checkmates += 1
+                    continue  # tactical oversight, not a strategic pattern
+
+                if _is_allowed_checkmate(validation, player_color_bool):
+                    total_allowed_checkmates += 1
+                    continue  # opponent delivering mate — not a strategic pattern
+
+                fen = position.get("fen")
+                move_played = position.get("move_played")
+                best_move = validation.get("best_move")
+                board = chess.Board(fen) if fen else None
+
                 for concept_key, concept_data in concepts.items():
-                    if concept_data.get("detected", False):
-                        if concept_key not in concept_stats:
-                            concept_stats[concept_key] = {
-                                "total_occurrences": 0,
-                                "error_occurrences": 0,
-                                "total_error_magnitude": 0,
-                                "positions": []
-                            }
-                        concept_stats[concept_key]["error_occurrences"] += 1
-                        concept_stats[concept_key]["total_error_magnitude"] += validation["error_magnitude"]
+                    if not concept_data.get("detected", False):
+                        continue
 
-                        # Only store instructive samples where the error is causally
-                        # linked to the Silman concept (best move handles it better)
-                        fen = position.get("fen")
-                        move_played = position.get("move_played")
-                        best_move = validation.get("best_move")
-                        player_color_bool = game.get("player_color", "white") == "white"
+                    if concept_key not in concept_stats:
+                        concept_stats[concept_key] = {
+                            "total_occurrences": 0,
+                            "error_occurrences": 0,
+                            "total_error_magnitude": 0,
+                            "positions": []
+                        }
 
-                        if fen and is_instructive(
-                            chess.Board(fen), move_played, best_move,
-                            concept_key, player_color_bool
-                        ):
-                            concept_stats[concept_key]["positions"].append({
-                                "game_id": game["game_id"],
-                                "white": game.get("white", "White"),
-                                "black": game.get("black", "Black"),
-                                "player_color": game.get("player_color", "white"),
-                                "fen": fen,
-                                "move_played": move_played,
-                                "best_move": best_move,
-                                "error_magnitude": validation["error_magnitude"]
-                            })
+                    # Gate the counter behind is_instructive — only count errors
+                    # that are causally linked to the concept (move type + score delta)
+                    if board and not is_instructive(board, move_played, best_move,
+                                                    concept_key, player_color_bool):
+                        continue
+
+                    concept_stats[concept_key]["error_occurrences"] += 1
+                    # Cap at MAX_STAT_CP so mate scores (≈10000 cp) don't skew the average
+                    stat_magnitude = min(validation["error_magnitude"], MAX_STAT_CP)
+                    concept_stats[concept_key]["total_error_magnitude"] += stat_magnitude
+
+                    if len(concept_stats[concept_key]["positions"]) < 3:
+                        concept_stats[concept_key]["positions"].append({
+                            "game_id": game["game_id"],
+                            "white": game.get("white", "White"),
+                            "black": game.get("black", "Black"),
+                            "player_color": game.get("player_color", "white"),
+                            "fen": fen,
+                            "move_played": move_played,
+                            "best_move": best_move,
+                            "error_magnitude": validation["error_magnitude"]
+                        })
             else:
                 for concept_key, concept_data in concepts.items():
                     if concept_data.get("detected", False):
@@ -94,6 +138,8 @@ def build_profile(games_data: list) -> dict:
         "total_games": len(games_data),
         "total_positions_analyzed": total_positions,
         "total_errors_detected": total_errors,
+        "total_missed_checkmates": total_missed_checkmates,
+        "total_allowed_checkmates": total_allowed_checkmates,
         "overall_error_rate": round(total_errors / total_positions, 3) if total_positions > 0 else 0,
         "weaknesses": weaknesses
     }

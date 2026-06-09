@@ -113,8 +113,11 @@ class TestAnalyzePlayer:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
+        # Force at least one concept detected per position so batch_validate is reached
+        mock_concepts = {"weak_square": {"detected": True, "squares": ["e5"], "count": 1}}
         mock_game = make_mock_game()
-        with patch("main.load_games_from_file", return_value=[mock_game, mock_game]) as mock_load, \
+        with patch("main.load_games_from_file", return_value=[mock_game, mock_game]), \
+             patch("main.detect_concepts", return_value=mock_concepts), \
              patch("main.batch_validate", return_value=[MOCK_VALIDATION] * 3) as mock_validate, \
              patch("main.diagnose", return_value=MOCK_DIAGNOSIS), \
              patch("main.OUTPUT_DIR", output_dir):
@@ -149,7 +152,7 @@ class TestAnalyzePlayerFromUsername:
              patch("main.diagnose", return_value=MOCK_DIAGNOSIS), \
              patch("main.OUTPUT_DIR", output_dir):
             from main import analyze_player_from_username
-            return analyze_player_from_username(username, n_months=2)
+            return analyze_player_from_username(username, n_games=2)
 
     def test_returns_profile_and_diagnosis_tuple(self, tmp_path):
         output_dir = str(tmp_path / "output")
@@ -180,5 +183,5 @@ class TestAnalyzePlayerFromUsername:
              patch("main.diagnose", return_value=MOCK_DIAGNOSIS), \
              patch("main.OUTPUT_DIR", output_dir):
             from main import analyze_player_from_username
-            analyze_player_from_username("sprandel", n_months=2)
-        mock_fetch.assert_called_once_with("sprandel", n_months=2)
+            analyze_player_from_username("sprandel", n_games=2)
+        mock_fetch.assert_called_once_with("sprandel", n_games=2)

@@ -4,7 +4,7 @@ import tempfile
 import pytest
 
 
-def make_position(concepts_detected: dict, is_error: bool, error_magnitude: float = 0.0) -> dict:
+def make_position(concepts_detected: dict, is_error: bool, error_magnitude: float = 0.0, eval_before: int = 20) -> dict:
     """Helper to build a position dict for games_data."""
     return {
         "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
@@ -12,10 +12,10 @@ def make_position(concepts_detected: dict, is_error: bool, error_magnitude: floa
         "concepts_detected": concepts_detected,
         "stockfish_validation": {
             "is_error": is_error,
-            "eval_before": 20,
-            "eval_after": 20 - error_magnitude if not is_error else 20 - error_magnitude,
+            "eval_before": eval_before,
+            "eval_after": eval_before - error_magnitude,
             "error_magnitude": error_magnitude,
-            "best_move": "e2e4"
+            "best_move": None  # None bypasses is_instructive gate so profile tests stay focused
         }
     }
 
@@ -116,6 +116,137 @@ class TestBuildProfile:
         assert "error_rate" in w
         assert "avg_error_magnitude_cp" in w
         assert "sample_positions" in w
+
+
+class TestMissedCheckmate:
+    def test_missed_checkmate_counted_in_metric(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        # eval_before=9500 with player_color="white" → white had forced mate
+        pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=9500)
+        game = {"game_id": "g1", "player_color": "white", "positions": [pos]}
+        result = build_profile([game])
+        assert result["total_missed_checkmates"] == 1
+
+    def test_missed_checkmate_not_counted_in_concepts(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        # 4 missed checkmates + 3 normal errors with the same concept
+        mc_pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=9500)
+        normal_pos = make_position(concepts, is_error=True, error_magnitude=100)
+        game = {
+            "game_id": "g1",
+            "player_color": "white",
+            "positions": [mc_pos] * 4 + [normal_pos] * 3,
+        }
+        result = build_profile([game])
+        assert result["total_missed_checkmates"] == 4
+        # only the 3 normal errors should count toward the concept
+        assert result["weaknesses"][0]["error_occurrences"] == 3
+
+    def test_missed_checkmate_still_counts_as_total_error(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": False}}
+        pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=9500)
+        game = {"game_id": "g1", "player_color": "white", "positions": [pos]}
+        result = build_profile([game])
+        assert result["total_errors_detected"] == 1
+        assert result["total_missed_checkmates"] == 1
+
+    def test_black_player_missed_checkmate_detected(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        # eval_before=-9500 from white's perspective → black has forced mate
+        pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=-9500)
+        game = {"game_id": "g1", "player_color": "black", "positions": [pos]}
+        result = build_profile([game])
+        assert result["total_missed_checkmates"] == 1
+        assert result["weaknesses"] == []  # filtered from concepts
+
+    def test_opponent_has_mate_is_not_a_missed_checkmate(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        # eval_before=-9500 with white player → opponent has forced mate against white
+        # This is an allowed_checkmate (not missed_checkmate), so concepts are filtered
+        pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=-9500)
+        game = {"game_id": "g1", "player_color": "white", "positions": [pos]}
+        result = build_profile([game])
+        assert result["total_missed_checkmates"] == 0
+        assert result["total_allowed_checkmates"] == 1
+
+    def test_empty_games_has_zero_missed_checkmates(self):
+        from modules.profile_builder import build_profile
+        result = build_profile([])
+        assert result["total_missed_checkmates"] == 0
+
+
+class TestAllowedCheckmate:
+    def test_allowed_mate_via_blunder_counted_in_metric(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        # eval_before=20, eval_after=-9500 → player's move handed opponent forced mate
+        pos = make_position(concepts, is_error=True, error_magnitude=9520, eval_before=20)
+        pos["stockfish_validation"]["eval_after"] = -9500
+        game = {"game_id": "g1", "player_color": "white", "positions": [pos]}
+        result = build_profile([game])
+        assert result["total_allowed_checkmates"] == 1
+
+    def test_allowed_mate_already_mated_before_counted(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        # eval_before=-9500 → player was already in a forced mate
+        pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=-9500)
+        game = {"game_id": "g1", "player_color": "white", "positions": [pos]}
+        result = build_profile([game])
+        assert result["total_allowed_checkmates"] == 1
+
+    def test_allowed_mate_not_counted_in_concepts(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        am_pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=-9500)
+        normal_pos = make_position(concepts, is_error=True, error_magnitude=100)
+        game = {
+            "game_id": "g1",
+            "player_color": "white",
+            "positions": [am_pos] * 4 + [normal_pos] * 3,
+        }
+        result = build_profile([game])
+        assert result["total_allowed_checkmates"] == 4
+        assert result["weaknesses"][0]["error_occurrences"] == 3
+
+    def test_allowed_mate_still_counts_as_total_error(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": False}}
+        pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=-9500)
+        game = {"game_id": "g1", "player_color": "white", "positions": [pos]}
+        result = build_profile([game])
+        assert result["total_errors_detected"] == 1
+        assert result["total_allowed_checkmates"] == 1
+
+    def test_black_player_allowed_mate_detected(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        # eval_before=9500 from white's perspective → opponent (white) has forced mate against black
+        pos = make_position(concepts, is_error=True, error_magnitude=200, eval_before=9500)
+        game = {"game_id": "g1", "player_color": "black", "positions": [pos]}
+        result = build_profile([game])
+        assert result["total_allowed_checkmates"] == 1
+        assert result["weaknesses"] == []
+
+    def test_empty_games_has_zero_allowed_checkmates(self):
+        from modules.profile_builder import build_profile
+        result = build_profile([])
+        assert result["total_allowed_checkmates"] == 0
+
+    def test_missed_and_allowed_are_mutually_exclusive(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": False}}
+        mc = make_position(concepts, is_error=True, error_magnitude=200, eval_before=9500)
+        am = make_position(concepts, is_error=True, error_magnitude=200, eval_before=-9500)
+        game = {"game_id": "g1", "player_color": "white", "positions": [mc, am]}
+        result = build_profile([game])
+        assert result["total_missed_checkmates"] == 1
+        assert result["total_allowed_checkmates"] == 1
 
 
 class TestSaveAndLoadProfile:

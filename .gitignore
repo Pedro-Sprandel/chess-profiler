@@ -1,5 +1,8 @@
 .env
 output/
+data/profiler.db
+data/profiler.db-shm
+data/profiler.db-wal
 __pycache__/
 .pytest_cache/
 *.pyc

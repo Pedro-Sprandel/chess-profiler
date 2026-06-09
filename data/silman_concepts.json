@@ -7,7 +7,12 @@
       "silman_page": 67,
       "silman_category": "desequilíbrios estáticos",
       "description": "Casa que não pode ser defendida por peões e pode ser ocupada por peças adversárias.",
-      "strategic_implications": "Permite infiltração de cavalos e bispos adversários em posições fixas.",
+      "characteristics": [
+        "Nenhum peão aliado nas colunas adjacentes pode atacar essa casa",
+        "Localizada no campo próprio (ranks 4-8 para brancas, 1-5 para pretas)",
+        "Casa está sob ataque ou influência de peças adversárias"
+      ],
+      "strategic_implications": "Permite infiltração de cavalos e bispos adversários em posições fixas. Deve ser bloqueada com peças ou eliminada estruturalmente.",
       "detection_key": "weak_square"
     },
     {
@@ -16,8 +21,13 @@
       "silman_chapter": 4,
       "silman_page": 89,
       "silman_category": "desequilíbrios dinâmicos",
-      "description": "Coluna sem peões de nenhuma das cores, ideal para torres.",
-      "strategic_implications": "Quem controla colunas abertas controla o espaço e penetração.",
+      "description": "Coluna sem peões de nenhuma das cores, ideal para torres. Semi-aberta: coluna sem peão do jogador mas com peão adversário.",
+      "characteristics": [
+        "Ausência de peões na coluna (aberta) ou apenas peão adversário (semi-aberta)",
+        "Torre ou dama do jogador pode ser centralizada nessa coluna",
+        "Coluna conecta os dois campos e permite penetração na 7ª ou 8ª fileira"
+      ],
+      "strategic_implications": "Quem controla colunas abertas controla penetração e pode dobrar torres. Ignorar colunas abertas desperdiça a principal força das torres.",
       "detection_key": "open_file"
     },
     {
@@ -26,8 +36,13 @@
       "silman_chapter": 5,
       "silman_page": 112,
       "silman_category": "estrutura de peões",
-      "description": "Peão sem peões aliados nas colunas adjacentes.",
-      "strategic_implications": "Fraqueza permanente que requer defesa passiva. Adversário pressiona essa fraqueza.",
+      "description": "Peão sem peões aliados nas colunas adjacentes, tornando-o permanentemente vulnerável.",
+      "characteristics": [
+        "Nenhum peão aliado nas colunas imediatamente adjacentes",
+        "Não pode ser defendido por outro peão",
+        "A casa à sua frente torna-se alvo de bloqueio pelo adversário"
+      ],
+      "strategic_implications": "Fraqueza permanente que requer defesa passiva de peças. O adversário deve pressionar o peão isolado imobilizando peças defensoras e depois atacar outro ponto.",
       "detection_key": "isolated_pawn"
     },
     {
@@ -36,8 +51,13 @@
       "silman_chapter": 6,
       "silman_page": 134,
       "silman_category": "desequilíbrios de material",
-      "description": "Possuir dois bispos enquanto o adversário tem cavalo(s) ou bispo único.",
-      "strategic_implications": "Vantagem em posições abertas. Devem ser ativados abrindo o jogo.",
+      "description": "Possuir dois bispos enquanto o adversário tem cavalo(s) ou bispo único — vantagem em posições abertas.",
+      "characteristics": [
+        "Jogador tem dois bispos, adversário tem um ou nenhum",
+        "Posição é aberta ou pode ser aberta com trocas de peões",
+        "Bispos cobrem casas de ambas as cores simultaneamente"
+      ],
+      "strategic_implications": "Vantagem crescente à medida que o jogo se abre. Deve-se evitar trocas desnecessárias de bispos e abrir o jogo para ativá-los.",
       "detection_key": "bishop_pair"
     },
     {
@@ -46,8 +66,13 @@
       "silman_chapter": 3,
       "silman_page": 71,
       "silman_category": "desequilíbrios estáticos",
-      "description": "Cavalo em casa fraca no campo adversário, protegido por peão.",
-      "strategic_implications": "Cavalo fixo no centro ou campo adversário é uma vantagem posicional duradoura.",
+      "description": "Cavalo em casa fraca no campo adversário que não pode ser expulso por peões.",
+      "characteristics": [
+        "Cavalo localizado no campo adversário (ranks 5-8 para brancas)",
+        "Nenhum peão adversário pode atacar a casa do cavalo",
+        "Cavalo preferencialmente protegido por um peão aliado"
+      ],
+      "strategic_implications": "Cavalo fixo no centro ou campo adversário é vantagem posicional duradoura. Quanto mais fechada a posição, mais valioso o cavalo em posto avançado.",
       "detection_key": "knight_outpost"
     },
     {
@@ -56,8 +81,13 @@
       "silman_chapter": 7,
       "silman_page": 156,
       "silman_category": "dinâmica",
-      "description": "Avaliação da exposição do rei baseada em cobertura de peões e atividade adversária.",
-      "strategic_implications": "Rei exposto prioriza ataque imediato. Desequilíbrio que supera fatores posicionais.",
+      "description": "Avaliação da exposição do rei baseada em cobertura de peões de escudo e atividade adversária.",
+      "characteristics": [
+        "Menos de 2 peões de escudo imediatamente à frente do rei",
+        "Rei no centro ou em coluna semi-aberta",
+        "Adversário tem peças ativas apontando para o rei"
+      ],
+      "strategic_implications": "Rei exposto transforma o jogo em dinâmico: o adversário deve atacar imediatamente. Este desequilíbrio supera fatores posicionais estáticos quando a posição é aguda.",
       "detection_key": "king_safety"
     },
     {
@@ -66,9 +96,164 @@
       "silman_chapter": 8,
       "silman_page": 178,
       "silman_category": "desequilíbrios estáticos",
-      "description": "Controle de mais casas no tabuleiro, especialmente no centro.",
-      "strategic_implications": "Mais espaço = mais opções de manobra e restrição das peças adversárias.",
+      "description": "Controle de mais casas no tabuleiro, especialmente no campo adversário.",
+      "characteristics": [
+        "Peões avançados controlam casas no campo adversário",
+        "Peças têm mais opções de manobra do que as adversárias",
+        "Adversário tem pouco espaço para reorganizar suas peças"
+      ],
+      "strategic_implications": "Mais espaço significa mais opções e restrição das peças adversárias. Deve ser explorado com avanços de peões ou criação de fraquezas no campo do adversário.",
       "detection_key": "space_advantage"
+    },
+    {
+      "id": "passed_pawn",
+      "name": "Peão Passado",
+      "silman_chapter": 5,
+      "silman_page": 118,
+      "silman_category": "estrutura de peões",
+      "description": "Peão sem peões adversários bloqueando seu caminho até a promoção — na mesma coluna ou nas colunas adjacentes à sua frente.",
+      "characteristics": [
+        "Nenhum peão adversário na mesma coluna à frente do peão",
+        "Nenhum peão adversário nas colunas adjacentes à frente",
+        "Quanto mais avançado, maior o valor do peão passado"
+      ],
+      "strategic_implications": "Peão passado é uma vantagem crescente no final de jogo. Deve ser apoiado por peças e avançado. O adversário deve bloqueá-lo com uma peça, imobilizando-a.",
+      "detection_key": "passed_pawn"
+    },
+    {
+      "id": "doubled_pawn",
+      "name": "Peões Dobrados",
+      "silman_chapter": 5,
+      "silman_page": 105,
+      "silman_category": "estrutura de peões",
+      "description": "Dois ou mais peões do mesmo jogador na mesma coluna, criando fraqueza estrutural.",
+      "characteristics": [
+        "Dois peões aliados ocupam a mesma coluna",
+        "O peão de trás não pode avançar enquanto o da frente estiver presente",
+        "A coluna com peões dobrados frequentemente torna-se semi-aberta para o adversário"
+      ],
+      "strategic_implications": "Peões dobrados são estruturalmente fracos e limitam a mobilidade de peões. O adversário deve pressionar essa coluna com torres. Em alguns casos podem ser compensados por melhora nas peças.",
+      "detection_key": "doubled_pawn"
+    },
+    {
+      "id": "rook_on_7th",
+      "name": "Torre na 7ª Fileira",
+      "silman_chapter": 4,
+      "silman_page": 95,
+      "silman_category": "desequilíbrios dinâmicos",
+      "description": "Torre penetrada na 7ª fileira (2ª para as pretas), atacando peões e restringindo o rei adversário.",
+      "characteristics": [
+        "Torre localizada na 7ª fileira do ponto de vista do jogador",
+        "Peões adversários ainda na 7ª fileira como alvos",
+        "Rei adversário forçado a ficar na 8ª fileira"
+      ],
+      "strategic_implications": "Torre na 7ª fileira é extremamente poderosa: ataca peões, restringe o rei e ganha tempo. Dobrar torres na 7ª fileira pode ser decisivo.",
+      "detection_key": "rook_on_7th"
+    },
+    {
+      "id": "bad_bishop",
+      "name": "Bispo Ruim",
+      "silman_chapter": 6,
+      "silman_page": 142,
+      "silman_category": "desequilíbrios de material",
+      "description": "Bispo bloqueado pela maioria dos próprios peões na mesma cor de suas casas — peças na mesma cor restringem o bispo.",
+      "characteristics": [
+        "Maioria dos peões do jogador está nas mesmas casas de cor do bispo",
+        "Bispo tem poucas casas disponíveis para se mover",
+        "O bispo adversário (ou cavalo) é mais ativo comparativamente"
+      ],
+      "strategic_implications": "Bispo ruim é uma peça passiva que não contribui para o jogo. A estratégia correta é colocar peões na cor oposta ao bispo ou trocá-lo por uma peça adversária ativa.",
+      "detection_key": "bad_bishop"
+    },
+    {
+      "id": "pawn_majority",
+      "name": "Maioria de Peões",
+      "silman_chapter": 8,
+      "silman_page": 185,
+      "silman_category": "estrutura de peões",
+      "description": "Superioridade numérica de peões em um flanco — permite criar um peão passado através de avanços.",
+      "characteristics": [
+        "Mais peões que o adversário no flanco da dama (colunas a-d) ou do rei (colunas e-h)",
+        "Peões da maioria não estão bloqueados ou dobrados",
+        "Oponente não tem maioria equivalente no mesmo flanco"
+      ],
+      "strategic_implications": "Maioria saudável de peões deve ser avançada para criar um peão passado. Ignorar a maioria desperdiça uma vantagem estrutural de longo prazo.",
+      "detection_key": "pawn_majority"
+    },
+    {
+      "id": "piece_activity",
+      "name": "Atividade de Peças",
+      "silman_chapter": 2,
+      "silman_page": 45,
+      "silman_category": "desequilíbrios dinâmicos",
+      "description": "Comparação entre a mobilidade das peças do jogador e as adversárias — peças ativas controlam mais casas.",
+      "characteristics": [
+        "Peças do jogador atacam significativamente mais casas que as adversárias",
+        "Peças adversárias estão restritas ou sem squares úteis",
+        "Vantagem de mobilidade superior a 3 casas por peça em média"
+      ],
+      "strategic_implications": "Peças ativas são mais valiosas que material passivo. Deve-se sempre procurar melhorar a peça menos ativa antes de qualquer outra ação.",
+      "detection_key": "piece_activity"
+    },
+    {
+      "id": "overloaded_piece",
+      "name": "Peça Sobrecarregada",
+      "silman_chapter": 2,
+      "silman_page": 52,
+      "silman_category": "dinâmica",
+      "description": "Peça que defende duas ou mais peças/casas simultaneamente — sobrecarregada ao ponto de não poder cumprir todas as funções.",
+      "characteristics": [
+        "Uma peça é o único defensor de dois ou mais alvos atacados",
+        "Remover essa peça ou forçá-la a se mover expõe um dos alvos",
+        "Adversário pode explorar com ameaças duplas ou sacrifícios"
+      ],
+      "strategic_implications": "Peça sobrecarregada é alvo de combinações táticas. O jogador deve redistribuir a defesa antes que o adversário explore a sobrecarga com ameaças duplas.",
+      "detection_key": "overloaded_piece"
+    },
+    {
+      "id": "backward_pawn",
+      "name": "Peão Atrasado",
+      "silman_chapter": 5,
+      "silman_page": 109,
+      "silman_category": "estrutura de peões",
+      "description": "Peão que não pode avançar com segurança porque a casa à sua frente é controlada por um peão adversário, e não tem apoio de peões aliados por trás nas colunas adjacentes.",
+      "characteristics": [
+        "A casa imediatamente à frente está sob controle de um peão adversário",
+        "Nenhum peão aliado nas colunas adjacentes por trás pode avançar para apoiá-lo",
+        "O peão está preso, tornando-se alvo de pressão de torres na coluna semi-aberta"
+      ],
+      "strategic_implications": "Peão atrasado é fraqueza estrutural permanente: preso na coluna semi-aberta, torna-se alvo de pressão de torres. O adversário deve dobrar torres nessa coluna; o jogador deve buscar avançar o peão quando possível ou trocá-lo para eliminar a fraqueza.",
+      "detection_key": "backward_pawn"
+    },
+    {
+      "id": "center_control",
+      "name": "Controle do Centro",
+      "silman_chapter": 2,
+      "silman_page": 35,
+      "silman_category": "desequilíbrios estáticos",
+      "description": "Superioridade no controle das quatro casas centrais (d4, e4, d5, e5) — quem domina o centro dita o ritmo do jogo e tem mais opções em todos os flancos.",
+      "characteristics": [
+        "Mais casas centrais atacadas pelo jogador do que pelo adversário",
+        "Peões ou peças com influência direta sobre d4, d5, e4 ou e5",
+        "Adversário tem pouca ou nenhuma presença nas casas centrais"
+      ],
+      "strategic_implications": "Controle central é a base do pensamento estratégico de Silman: peças no centro têm mais mobilidade e opções de ataque em qualquer flanco. Uma vantagem central deve ser convertida em iniciativa concreta antes que o adversário consiga equalizar com avanços de peões.",
+      "detection_key": "center_control"
+    },
+    {
+      "id": "hanging_piece",
+      "name": "Peça Pendurada",
+      "silman_chapter": 1,
+      "silman_page": 26,
+      "silman_category": "dinâmica",
+      "description": "Peça do jogador atacada pelo adversário e sem qualquer defesa aliada — pode ser capturada gratuitamente.",
+      "characteristics": [
+        "A peça está sob ataque direto de uma ou mais peças adversárias",
+        "Nenhuma peça aliada cobre a casa da peça atacada",
+        "A captura resulta em ganho material imediato e sem compensação para o adversário"
+      ],
+      "strategic_implications": "Peça pendurada é o erro mais custoso no xadrez amador: perde material sem contrapartida. O jogador deve verificar a segurança de todas as suas peças após cada lance do adversário, antes de escolher seu próprio lance.",
+      "detection_key": "hanging_piece"
     }
   ]
 }

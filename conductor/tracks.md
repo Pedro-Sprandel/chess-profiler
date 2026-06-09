@@ -9,5 +9,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-## [ ] Track: Build a Streamlit web UI for the Chess Strategic Profiler
+## [~] Track: Build a Streamlit web UI for the Chess Strategic Profiler
 *Link: [./tracks/streamlit_ui_20260406/](./tracks/streamlit_ui_20260406/)*

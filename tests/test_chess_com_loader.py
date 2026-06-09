@@ -41,6 +41,54 @@ def make_mock_response(json_data):
     return resp
 
 
+def make_status_response(status_code: int):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = {}
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+class TestNetworkErrorHandling:
+    def test_404_raises_user_not_found(self):
+        import requests
+        from modules.chess_com_loader import fetch_archives, ChessComError
+        with patch("modules.chess_com_loader.requests.get",
+                   return_value=make_status_response(404)):
+            with pytest.raises(ChessComError, match="não encontrado"):
+                fetch_archives("ghost_user")
+
+    def test_429_raises_rate_limit_error(self):
+        from modules.chess_com_loader import fetch_archives, ChessComError
+        with patch("modules.chess_com_loader.requests.get",
+                   return_value=make_status_response(429)):
+            with pytest.raises(ChessComError, match="429"):
+                fetch_archives("sprandel")
+
+    def test_timeout_raises_chesscom_error(self):
+        import requests
+        from modules.chess_com_loader import fetch_archives, ChessComError
+        with patch("modules.chess_com_loader.requests.get",
+                   side_effect=requests.Timeout()):
+            with pytest.raises(ChessComError, match="Timeout"):
+                fetch_archives("sprandel")
+
+    def test_connection_error_raises_chesscom_error(self):
+        import requests
+        from modules.chess_com_loader import fetch_games_from_archive, ChessComError
+        with patch("modules.chess_com_loader.requests.get",
+                   side_effect=requests.ConnectionError()):
+            with pytest.raises(ChessComError, match="conexão"):
+                fetch_games_from_archive("https://api.chess.com/pub/x")
+
+    def test_request_includes_timeout(self):
+        from modules.chess_com_loader import fetch_archives
+        with patch("modules.chess_com_loader.requests.get",
+                   return_value=make_mock_response(ARCHIVE_RESPONSE)) as mock_get:
+            fetch_archives("sprandel")
+        assert mock_get.call_args.kwargs.get("timeout") is not None
+
+
 class TestFetchArchives:
     def test_returns_list_of_archive_urls(self):
         from modules.chess_com_loader import fetch_archives
