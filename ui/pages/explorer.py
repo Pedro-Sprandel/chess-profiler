@@ -4,6 +4,7 @@ import chess
 import chess.svg
 import streamlit as st
 import streamlit.components.v1 as components
+from modules.ai_diagnostician import explain_position
 from ui.i18n import t
 
 OUTPUT_DIR = "output"
@@ -50,7 +51,15 @@ def render():
     st.divider()
 
     # ── Position viewer ───────────────────────────────────────────────────────
-    positions = weakness["sample_positions"]
+    # Collapse multiple same-concept errors from the same game into a single
+    # representative position (the largest error). Consecutive flagged positions in
+    # one game are usually the same mistake a few moves apart.
+    by_game = {}
+    for p in weakness["sample_positions"]:
+        gid = p.get("game_id", "?")
+        if gid not in by_game or (p.get("error_magnitude") or 0) > (by_game[gid].get("error_magnitude") or 0):
+            by_game[gid] = p
+    positions = list(by_game.values())
     st.subheader(t("explorer.sample_positions", n=len(positions)))
 
     for i, pos in enumerate(positions):
@@ -105,3 +114,32 @@ def render():
                     key = "explorer.best_same" if best_move == move_played else "explorer.best_move"
                     st.markdown(t(key, v=best_move))
                 st.markdown(t("explorer.fen", v=fen))
+
+            # ── Ask AI why this move is a mistake ─────────────────────────────
+            lang = st.session_state.get("lang", "en")
+            # Cache the explanation per position+language so it persists across reruns.
+            cache_key = f"explain::{selected}::{selected_concept}::{i}::{lang}"
+
+            if st.button(t("explorer.ask_ai"), key=f"btn_{cache_key}"):
+                with st.spinner(t("explorer.ai_thinking")):
+                    try:
+                        st.session_state[cache_key] = {
+                            "text": explain_position(
+                                fen=fen,
+                                move_played=move_played,
+                                best_move=best_move,
+                                concept_key=weakness["concept"],
+                                error_magnitude=pos.get("error_magnitude"),
+                                player_color=player_color,
+                                lang=lang,
+                            )
+                        }
+                    except Exception as e:
+                        st.session_state[cache_key] = {"error": str(e)}
+
+            cached = st.session_state.get(cache_key)
+            if cached:
+                if "error" in cached:
+                    st.error(t("analyze.error.failed", e=cached["error"]))
+                else:
+                    st.info(cached["text"])

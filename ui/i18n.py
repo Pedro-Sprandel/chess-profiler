@@ -98,6 +98,8 @@ TRANSLATIONS = {
         "explorer.best_same": "✅ **Best move (same):** `{v}`",
         "explorer.best_move": "🟢 **Best move:** `{v}`",
         "explorer.fen": "**FEN:** `{v}`",
+        "explorer.ask_ai": "🤖 Ask AI why?",
+        "explorer.ai_thinking": "Asking the AI...",
 
         # Diagnosis
         "diagnosis.title": "🧠 Diagnosis Report",
@@ -214,6 +216,8 @@ TRANSLATIONS = {
         "explorer.best_same": "✅ **Melhor lance (igual):** `{v}`",
         "explorer.best_move": "🟢 **Melhor lance:** `{v}`",
         "explorer.fen": "**FEN:** `{v}`",
+        "explorer.ask_ai": "🤖 Perguntar à IA por quê?",
+        "explorer.ai_thinking": "Perguntando à IA...",
 
         # Diagnosis
         "diagnosis.title": "🧠 Diagnóstico",

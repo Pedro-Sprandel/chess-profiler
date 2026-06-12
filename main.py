@@ -146,10 +146,14 @@ def _diagnose_and_save(profile: dict, name: str, on_progress=None) -> dict:
     with open(diagnosis_path, "w", encoding="utf-8") as f:
         json.dump(diagnosis, f, indent=2, ensure_ascii=False)
 
-    _d = diagnosis.get("en", diagnosis)  # bilingual {"en":{}, "pt":{}} or legacy flat dict
+    # Console summary only — best-effort. The diagnosis is already persisted above,
+    # so a missing/odd field here must never abort the pipeline.
+    # Accepts bilingual {"en":{}, "pt":{}} or a legacy flat dict.
+    _d = diagnosis.get("en") or diagnosis.get("pt") or diagnosis
+    rc = (_d.get("root_cause") or {}) if isinstance(_d, dict) else {}
     print(f"\n=== DIAGNÓSTICO FINAL ===")
-    print(f"Causa raiz: {_d['root_cause']['name']}")
-    print(f"Confiança: {_d['confidence']}")
+    print(f"Causa raiz: {rc.get('name', '(n/d)')}")
+    print(f"Confiança: {_d.get('confidence', '(n/d)') if isinstance(_d, dict) else '(n/d)'}")
     _emit(on_progress, "done", 1, 1, "Analysis complete.")
     return diagnosis
 

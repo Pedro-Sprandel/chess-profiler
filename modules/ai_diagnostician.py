@@ -44,6 +44,93 @@ def _extract_json(raw: str) -> dict:
         )
 
 
+def _create_message(client, prompt: str, max_tokens: int = ANTHROPIC_MAX_TOKENS) -> str:
+    """
+    Envia um prompt ao Claude com retry em erros transitórios e retorna o texto
+    do primeiro bloco de resposta. Levanta RuntimeError/ValueError em falha.
+    """
+    response = None
+    last_error = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except (anthropic.RateLimitError, anthropic.APIConnectionError,
+                anthropic.InternalServerError) as e:
+            last_error = e
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+    if response is None:
+        raise RuntimeError(
+            f"Falha ao chamar a API da Anthropic após {_MAX_RETRIES} tentativas: {last_error}"
+        )
+
+    text_blocks = [t for b in response.content
+                   if isinstance((t := getattr(b, "text", None)), str)]
+    if not text_blocks:
+        raise ValueError("Resposta da IA não contém nenhum bloco de texto.")
+    return text_blocks[0]
+
+
+def explain_position(
+    fen: str,
+    move_played: str,
+    best_move: str,
+    concept_key: str,
+    error_magnitude: float | None = None,
+    player_color: str = "white",
+    lang: str = "en",
+    silman_concepts: dict | None = None,
+) -> str:
+    """
+    Pede ao Claude uma explicação curta e concreta de por que o lance jogado é um
+    erro (comparado ao melhor lance), conectando ao conceito Silman relevante.
+
+    Retorna texto em prosa (markdown simples) no idioma pedido (en/pt).
+    """
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY não configurada. Defina-a no arquivo .env "
+            "(veja .env.example) antes de usar a explicação da IA."
+        )
+
+    if silman_concepts is None:
+        silman_concepts = load_silman_concepts()
+    concept = silman_concepts.get(concept_key, {})
+    concept_name = concept.get("name", concept_key.replace("_", " "))
+    concept_category = concept.get("silman_category", "")
+    concept_desc = concept.get("description", "")
+
+    language = "Brazilian Portuguese" if lang == "pt" else "English"
+    if error_magnitude:
+        loss = f"~{round(float(error_magnitude))} centipawns"
+    else:
+        loss = "a significant amount"
+
+    prompt = f"""You are a chess coach explaining a single mistake to a student.
+
+The student played as {player_color}. A strategic profiler flagged this move as an
+instructive mistake related to the Silman concept "{concept_name}" (category: {concept_category}).
+Concept description: {concept_desc}
+
+Position (FEN): {fen}
+Move played by the student: {move_played}
+Engine's best move: {best_move}
+Approximate evaluation lost: {loss}
+
+In {language}, write 2 to 4 short sentences of plain prose (no headings, no bullet lists)
+explaining concretely WHY the played move is a mistake and why the best move is better —
+in terms of specific pieces, squares, and threats — and connect it to the concept
+"{concept_name}". Address the student directly."""
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    return _create_message(client, prompt, max_tokens=600).strip()
+
+
 def load_silman_concepts(path: str = "data/silman_concepts.json") -> dict:
     """
     Carrega a base de conhecimento do Silman e retorna um dict
