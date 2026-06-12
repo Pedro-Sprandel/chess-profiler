@@ -50,18 +50,35 @@ def render():
     st.divider()
 
     # ── Position viewer ───────────────────────────────────────────────────────
-    # Collapse multiple same-concept errors from the same game into a single
-    # representative position (the largest error). Consecutive flagged positions in
-    # one game are usually the same mistake a few moves apart.
-    by_game = {}
-    for p in weakness["sample_positions"]:
-        gid = p.get("game_id", "?")
-        if gid not in by_game or (p.get("error_magnitude") or 0) > (by_game[gid].get("error_magnitude") or 0):
-            by_game[gid] = p
-    positions = list(by_game.values())
-    st.subheader(t("explorer.sample_positions", n=len(positions)))
+    # Default view shows one representative position per game (the largest error),
+    # since consecutive flagged positions in a game are usually the same mistake a
+    # few moves apart. "Load more" then reveals the rest (incl. same-game ones), in
+    # descending error order, up to every error of this type.
+    all_positions = weakness["sample_positions"]
 
-    for i, pos in enumerate(positions):
+    def _mag(p):
+        return p.get("error_magnitude") or 0
+
+    best_idx_by_game = {}
+    for idx, p in enumerate(all_positions):
+        gid = p.get("game_id", "?")
+        if gid not in best_idx_by_game or _mag(p) > _mag(all_positions[best_idx_by_game[gid]]):
+            best_idx_by_game[gid] = idx
+    primary_idxs = set(best_idx_by_game.values())
+    primary = sorted((all_positions[i] for i in primary_idxs), key=_mag, reverse=True)
+    secondary = sorted((p for i, p in enumerate(all_positions) if i not in primary_idxs),
+                       key=_mag, reverse=True)
+    ordered = primary + secondary
+    total = len(ordered)
+
+    # Show at least 3 (or all if fewer); default to the deduped per-game count.
+    show_key = f"explorer_show::{selected}::{selected_concept}"
+    default_n = min(total, max(3, len(primary)))
+    show_n = min(st.session_state.get(show_key, default_n), total)
+
+    st.subheader(t("explorer.sample_positions", n=show_n))
+
+    for i, pos in enumerate(ordered[:show_n]):
         label = t("explorer.expander", i=i + 1, game=pos.get("game_id", "?"), cp=pos.get("error_magnitude", "?"))
         with st.expander(label, expanded=(i == 0)):
             fen = pos.get("fen")
@@ -142,3 +159,9 @@ def render():
                     st.error(t("analyze.error.failed", e=cached["error"]))
                 else:
                     st.info(cached["text"])
+
+    # ── Load more ─────────────────────────────────────────────────────────────
+    if show_n < total:
+        if st.button(t("explorer.load_more", shown=show_n, total=total), key=f"more_{show_key}"):
+            st.session_state[show_key] = min(show_n + 3, total)
+            st.rerun()

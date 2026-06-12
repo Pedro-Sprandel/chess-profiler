@@ -104,6 +104,7 @@ TRANSLATIONS = {
         "explorer.fen": "**FEN:** `{v}`",
         "explorer.ask_ai": "🤖 Ask AI why?",
         "explorer.ai_thinking": "Asking the AI...",
+        "explorer.load_more": "➕ Load more ({shown} of {total})",
 
         # Diagnosis
         "diagnosis.title": "🧠 Diagnosis Report",
@@ -226,6 +227,7 @@ TRANSLATIONS = {
         "explorer.fen": "**FEN:** `{v}`",
         "explorer.ask_ai": "🤖 Perguntar à IA por quê?",
         "explorer.ai_thinking": "Perguntando à IA...",
+        "explorer.load_more": "➕ Carregar mais ({shown} de {total})",
 
         # Diagnosis
         "diagnosis.title": "🧠 Diagnóstico",

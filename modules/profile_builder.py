@@ -129,7 +129,9 @@ def build_profile(games_data: list) -> dict:
                 "error_occurrences": stats["error_occurrences"],
                 "error_rate": round(error_rate, 3),
                 "avg_error_magnitude_cp": round(avg_error, 1),
-                "sample_positions": stats["positions"][:3]
+                # Store every error position so the Game Explorer can show one per game
+                # by default and "load more" up to all of them.
+                "sample_positions": stats["positions"]
             })
 
     weaknesses.sort(key=lambda x: x["error_occurrences"], reverse=True)
