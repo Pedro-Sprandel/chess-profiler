@@ -93,17 +93,18 @@ def build_profile(games_data: list) -> dict:
                     stat_magnitude = min(validation["error_magnitude"], MAX_STAT_CP)
                     concept_stats[concept_key]["total_error_magnitude"] += stat_magnitude
 
-                    if len(concept_stats[concept_key]["positions"]) < 3:
-                        concept_stats[concept_key]["positions"].append({
-                            "game_id": game["game_id"],
-                            "white": game.get("white", "White"),
-                            "black": game.get("black", "Black"),
-                            "player_color": game.get("player_color", "white"),
-                            "fen": fen,
-                            "move_played": move_played,
-                            "best_move": best_move,
-                            "error_magnitude": validation["error_magnitude"]
-                        })
+                    # Store every instructive error position; the Game Explorer shows
+                    # one per game by default and "loads more" up to all of them.
+                    concept_stats[concept_key]["positions"].append({
+                        "game_id": game["game_id"],
+                        "white": game.get("white", "White"),
+                        "black": game.get("black", "Black"),
+                        "player_color": game.get("player_color", "white"),
+                        "fen": fen,
+                        "move_played": move_played,
+                        "best_move": best_move,
+                        "error_magnitude": validation["error_magnitude"]
+                    })
             else:
                 for concept_key, concept_data in concepts.items():
                     if concept_data.get("detected", False):

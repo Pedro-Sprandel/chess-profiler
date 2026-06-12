@@ -274,3 +274,18 @@ class TestSaveAndLoadProfile:
             assert loaded == profile
         finally:
             os.unlink(tmp_path)
+
+
+class TestSamplePositionsStoreAll:
+    def test_stores_all_error_positions_not_just_three(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}}
+        # 5 instructive errors for one concept (best_move None bypasses is_instructive)
+        game = make_game("g1", [
+            make_position(concepts, is_error=True, error_magnitude=100 + i)
+            for i in range(5)
+        ])
+        result = build_profile([game])
+        w = result["weaknesses"][0]
+        assert w["error_occurrences"] == 5
+        assert len(w["sample_positions"]) == 5
