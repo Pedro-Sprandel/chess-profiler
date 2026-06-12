@@ -34,7 +34,11 @@ import json
 import sqlite3
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "profiler.db"
+from config import DB_PATH as _CONFIG_DB_PATH
+
+# Default: config's DB_PATH (set when DATA_DIR is configured for deploy), else the
+# local module-relative path used during development.
+DEFAULT_DB_PATH = Path(_CONFIG_DB_PATH) if _CONFIG_DB_PATH else Path(__file__).parent.parent / "data" / "profiler.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS fen_cache (
@@ -95,6 +99,9 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
+        # With a few concurrent users, two analyses may write at once. Wait up to 5s
+        # for the lock instead of raising "database is locked".
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.executescript(SCHEMA)
         self._conn.commit()
 

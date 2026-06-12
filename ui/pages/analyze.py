@@ -3,8 +3,7 @@ import chess
 import streamlit as st
 from main import analyze_profile, analyze_profile_from_username
 from ui.i18n import t
-
-OUTPUT_DIR = "output"
+from config import OUTPUT_DIR
 
 
 def _run_with_progress(fn, **kwargs):

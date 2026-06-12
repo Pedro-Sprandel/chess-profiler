@@ -9,8 +9,8 @@ from modules.stockfish_validator import batch_validate, open_engine
 from modules.profile_builder import build_profile, save_profile, load_profile
 from modules.ai_diagnostician import diagnose, load_silman_concepts
 from modules.db import Database
+from config import OUTPUT_DIR
 
-OUTPUT_DIR = "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Validation placeholder for positions without a detected concept (no Stockfish call).

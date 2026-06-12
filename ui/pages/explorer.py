@@ -6,8 +6,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from modules.ai_diagnostician import explain_position
 from ui.i18n import t
-
-OUTPUT_DIR = "output"
+from config import OUTPUT_DIR
 
 
 def render():

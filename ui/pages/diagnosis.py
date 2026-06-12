@@ -5,8 +5,7 @@ import streamlit as st
 from main import run_diagnosis
 from ui.components.diagnosis_card import format_root_cause, format_weakness_table, format_study_priority
 from ui.i18n import t
-
-OUTPUT_DIR = "output"
+from config import OUTPUT_DIR
 
 
 def _run_pending_diagnosis():

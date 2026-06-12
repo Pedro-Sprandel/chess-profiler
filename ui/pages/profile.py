@@ -4,8 +4,7 @@ import pandas as pd
 import streamlit as st
 from ui.components.weakness_chart import build_error_count_chart, build_error_magnitude_chart
 from ui.i18n import t
-
-OUTPUT_DIR = "output"
+from config import OUTPUT_DIR
 
 
 def render():

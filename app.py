@@ -1,6 +1,9 @@
+import hmac
 import os
 import streamlit as st
 import streamlit.components.v1 as components
+
+from config import APP_PASSWORD, OUTPUT_DIR
 
 st.set_page_config(
     page_title="Chess Strategic Profiler",
@@ -8,7 +11,33 @@ st.set_page_config(
     layout="wide",
 )
 
-OUTPUT_DIR = "output"
+
+def _check_password() -> bool:
+    """Shared-password gate for the private deploy.
+
+    If APP_PASSWORD is unset (local/dev) there is no gate. Otherwise the app is
+    blocked until the visitor enters the matching password. This is a lightweight
+    gate for a trusted handful of friends — not a real auth/identity system.
+    """
+    if not APP_PASSWORD:
+        return True
+    if st.session_state.get("_authenticated"):
+        return True
+
+    st.title("🔒 Chess Strategic Profiler")
+    entered = st.text_input("Password", type="password", key="_password_input")
+    if entered:
+        if hmac.compare_digest(entered, APP_PASSWORD):
+            st.session_state["_authenticated"] = True
+            del st.session_state["_password_input"]
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    return False
+
+
+if not _check_password():
+    st.stop()
 
 # ── Session state defaults ────────────────────────────────────────────────────
 if "lang" not in st.session_state:

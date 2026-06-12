@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      APP_PASSWORD: ${APP_PASSWORD}
+      DATA_DIR: /data
+    volumes:
+      - chess_data:/data
+
+volumes:
+  chess_data:
