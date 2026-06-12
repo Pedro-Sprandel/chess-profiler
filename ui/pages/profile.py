@@ -65,8 +65,22 @@ def render():
     ]
 
     df = pd.DataFrame(rows)
+
+    # Red heat-map on the error-rate column without pulling in matplotlib
+    # (Styler.background_gradient requires it). Normalize across the column and
+    # shade from light to dark red.
+    rate_col = t("profile.col.error_rate")
+    rates = df[rate_col].astype(float)
+    lo, hi = rates.min(), rates.max()
+    span = (hi - lo) or 1.0
+
+    def _heat(v):
+        norm = (float(v) - lo) / span
+        text = "#ffffff" if norm > 0.6 else "#000000"
+        return f"background-color: rgba(204, 0, 0, {0.12 + 0.6 * norm:.3f}); color: {text}"
+
     st.dataframe(
-        df.style.background_gradient(subset=[t("profile.col.error_rate")], cmap="Reds"),
+        df.style.map(_heat, subset=[rate_col]),
         use_container_width=True,
         hide_index=True,
     )
