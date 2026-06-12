@@ -71,14 +71,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Your name (per-person namespacing) ────────────────────────────────────
-    # Prefixes the profiles you create so several friends sharing this site don't
-    # overwrite each other when analyzing the same chess.com nickname.
-    st.text_input(t("sidebar.owner"), key="owner_name", disabled=_busy,
-                  help=t("sidebar.owner_help"))
-
-    st.divider()
-
     # ── Shared profile selector ───────────────────────────────────────────────
     profile_files = sorted(
         f for f in os.listdir(OUTPUT_DIR) if f.endswith("_profile.json")

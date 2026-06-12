@@ -55,11 +55,10 @@ def _execute_pending():
     sidebar widgets are disabled so the user can't interrupt the in-flight pipeline.
     """
     req = st.session_state.analysis_request
-    owner = req.get("owner", "")
     try:
         depth = req.get("depth", STOCKFISH_DEPTH)
+        name = req["profile_name"]
         if req["kind"] == "chesscom":
-            name = make_profile_name(owner, req["username"])
             profile = _run_with_progress(
                 analyze_profile_from_username,
                 username=req["username"],
@@ -68,7 +67,6 @@ def _execute_pending():
                 depth=depth,
             )
         else:
-            name = make_profile_name(owner, req["player_name"])
             profile = _run_with_progress(
                 analyze_profile,
                 pgn_path=req["pgn_path"],
@@ -149,8 +147,9 @@ def render():
                 if not username.strip():
                     st.error(t("analyze.error.no_user"))
                 else:
+                    name = make_profile_name(username.strip(), depth, n_games)
                     _queue({"kind": "chesscom", "username": username.strip(), "n_games": n_games,
-                            "owner": st.session_state.get("owner_name", ""), "depth": depth})
+                            "depth": depth, "profile_name": name})
 
         else:
             pgn_file = st.file_uploader(t("analyze.pgn.label"), type=["pgn"], key="analyze_pgn_upload")
@@ -168,9 +167,9 @@ def render():
                     with open(pgn_path, "wb") as f:
                         f.write(pgn_file.read())
                     player_color = chess.WHITE if color == t("analyze.color.white") else chess.BLACK
+                    name = make_profile_name(player_name.strip(), depth)
                     _queue({"kind": "pgn", "pgn_path": pgn_path,
-                            "player_name": player_name.strip(), "player_color": player_color,
-                            "owner": st.session_state.get("owner_name", ""), "depth": depth})
+                            "player_color": player_color, "depth": depth, "profile_name": name})
 
     # ── Load Saved Profile ────────────────────────────────────────────────────
     with tab_load:
