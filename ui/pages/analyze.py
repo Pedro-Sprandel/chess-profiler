@@ -3,6 +3,7 @@ import chess
 import streamlit as st
 from main import analyze_profile, analyze_profile_from_username
 from ui.i18n import t
+from ui.profiles import make_profile_name
 from config import OUTPUT_DIR
 
 
@@ -54,22 +55,24 @@ def _execute_pending():
     sidebar widgets are disabled so the user can't interrupt the in-flight pipeline.
     """
     req = st.session_state.analysis_request
+    owner = req.get("owner", "")
     try:
         if req["kind"] == "chesscom":
+            name = make_profile_name(owner, req["username"])
             profile = _run_with_progress(
                 analyze_profile_from_username,
                 username=req["username"],
                 n_games=req["n_games"],
+                profile_name=name,
             )
-            name = req["username"]
         else:
+            name = make_profile_name(owner, req["player_name"])
             profile = _run_with_progress(
                 analyze_profile,
                 pgn_path=req["pgn_path"],
-                player_name=req["player_name"],
+                player_name=name,
                 player_color=req["player_color"],
             )
-            name = req["player_name"]
 
         st.session_state.active_profile = f"{name}_profile.json"
         st.session_state.analysis_outcome = {
@@ -137,7 +140,8 @@ def render():
                 if not username.strip():
                     st.error(t("analyze.error.no_user"))
                 else:
-                    _queue({"kind": "chesscom", "username": username.strip(), "n_games": n_games})
+                    _queue({"kind": "chesscom", "username": username.strip(), "n_games": n_games,
+                            "owner": st.session_state.get("owner_name", "")})
 
         else:
             pgn_file = st.file_uploader(t("analyze.pgn.label"), type=["pgn"], key="analyze_pgn_upload")
@@ -156,7 +160,8 @@ def render():
                         f.write(pgn_file.read())
                     player_color = chess.WHITE if color == t("analyze.color.white") else chess.BLACK
                     _queue({"kind": "pgn", "pgn_path": pgn_path,
-                            "player_name": player_name.strip(), "player_color": player_color})
+                            "player_name": player_name.strip(), "player_color": player_color,
+                            "owner": st.session_state.get("owner_name", "")})
 
     # ── Load Saved Profile ────────────────────────────────────────────────────
     with tab_load:

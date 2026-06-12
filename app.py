@@ -4,6 +4,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from config import APP_PASSWORD, OUTPUT_DIR
+from ui.profiles import display_label
 
 st.set_page_config(
     page_title="Chess Strategic Profiler",
@@ -70,6 +71,14 @@ with st.sidebar:
 
     st.divider()
 
+    # ── Your name (per-person namespacing) ────────────────────────────────────
+    # Prefixes the profiles you create so several friends sharing this site don't
+    # overwrite each other when analyzing the same chess.com nickname.
+    st.text_input(t("sidebar.owner"), key="owner_name", disabled=_busy,
+                  help=t("sidebar.owner_help"))
+
+    st.divider()
+
     # ── Shared profile selector ───────────────────────────────────────────────
     profile_files = sorted(
         f for f in os.listdir(OUTPUT_DIR) if f.endswith("_profile.json")
@@ -84,13 +93,14 @@ with st.sidebar:
             index=idx,
             key="profile_widget",
             disabled=_busy,
+            format_func=display_label,
         )
         # Sync manual sidebar selection back to active_profile
         st.session_state.active_profile = chosen
 
         # ── Delete profile ────────────────────────────────────────────────────
         with st.expander(t("sidebar.delete")):
-            st.warning(t("sidebar.delete_warn", name=chosen))
+            st.warning(t("sidebar.delete_warn", name=display_label(chosen)))
             if st.button(t("sidebar.delete_confirm"), type="primary", use_container_width=True, disabled=_busy):
                 base = chosen[: -len("_profile.json")]
                 for suffix in ("_profile.json", "_diagnosis.json"):
@@ -99,7 +109,7 @@ with st.sidebar:
                         os.remove(fpath)
                 st.session_state.active_profile = None
                 st.session_state.pop("profile_widget", None)
-                st.toast(t("sidebar.deleted", name=chosen))
+                st.toast(t("sidebar.deleted", name=display_label(chosen)))
                 st.rerun()
     else:
         st.caption(t("sidebar.no_profiles"))

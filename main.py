@@ -185,10 +185,14 @@ def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.
     return _build_profile_phase(games_data, player_name, "pgn", on_progress)
 
 
-def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=None) -> dict:
+def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=None,
+                                  profile_name: str | None = None) -> dict:
     """
     Constrói (e salva) apenas o perfil de fraquezas a partir de um username do
     Chess.com, sem rodar o diagnóstico da IA. Retorna o profile_dict.
+
+    profile_name: nome usado para salvar o perfil (default: username). Permite à UI
+    prefixar o perfil com o dono (namespacing por pessoa) sem afetar a busca.
     """
     print(f"\n=== Iniciando análise de {username} via Chess.com API ===\n")
 
@@ -197,7 +201,7 @@ def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=
     _emit(on_progress, "fetch", 1, 1, f"{len(game_color_pairs)} games loaded from Chess.com")
 
     games_data = _process_games(game_color_pairs, on_progress)
-    return _build_profile_phase(games_data, username, "chess_com", on_progress)
+    return _build_profile_phase(games_data, profile_name or username, "chess_com", on_progress)
 
 
 def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.WHITE, on_progress=None):
