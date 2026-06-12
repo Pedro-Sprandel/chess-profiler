@@ -2,10 +2,30 @@ import os
 import json
 import pandas as pd
 import streamlit as st
+from main import run_diagnosis
 from ui.components.diagnosis_card import format_root_cause, format_weakness_table, format_study_priority
 from ui.i18n import t
 
 OUTPUT_DIR = "output"
+
+
+def _run_pending_diagnosis():
+    """Phase 2: run the AI diagnosis after the profile has already been rendered above.
+
+    Renders a spinner here (the last section), so the user can read/scroll the Profile
+    Dashboard and Game Explorer while the API call is in flight. On completion the
+    diagnosis file is written and we rerun to display it.
+    """
+    name = st.session_state.get("diagnosis_target")
+    with st.spinner(t("diagnosis.running")):
+        try:
+            run_diagnosis(name)
+        except Exception as e:
+            st.session_state.diagnosis_error = str(e)
+        finally:
+            st.session_state.diagnosis_running = False
+            st.session_state.pop("diagnosis_target", None)
+            st.rerun()
 
 
 def render():
@@ -16,6 +36,16 @@ def render():
     if not active_profile:
         st.info(t("diagnosis.no_files"))
         return
+
+    # Phase 2: an analysis just built the profile; run the AI diagnosis now (with a
+    # spinner) so everything above is already visible while we wait on the API.
+    if st.session_state.get("diagnosis_running"):
+        _run_pending_diagnosis()
+        return
+
+    error = st.session_state.pop("diagnosis_error", None)
+    if error:
+        st.error(t("analyze.error.failed", e=error))
 
     diagnosis_file = active_profile.replace("_profile.json", "_diagnosis.json")
     diagnosis_path = os.path.join(OUTPUT_DIR, diagnosis_file)

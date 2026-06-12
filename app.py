@@ -22,16 +22,21 @@ if "active_profile" not in st.session_state:
 
 from ui.i18n import t
 
+_busy = st.session_state.get("analysis_running", False) or st.session_state.get("diagnosis_running", False)
+
 with st.sidebar:
     st.title(t("nav.title"))
 
     # ── Language selector ─────────────────────────────────────────────────────
+    # Disabled while an analysis is running: switching widgets mid-run triggers a
+    # rerun that would interrupt the in-flight pipeline.
     st.radio(
         t("lang.label"),
         options=["en", "pt"],
         format_func=lambda x: "🇺🇸 English" if x == "en" else "🇧🇷 Português",
         horizontal=True,
         key="lang",
+        disabled=_busy,
     )
 
     st.divider()
@@ -49,9 +54,24 @@ with st.sidebar:
             profile_files,
             index=idx,
             key="profile_widget",
+            disabled=_busy,
         )
         # Sync manual sidebar selection back to active_profile
         st.session_state.active_profile = chosen
+
+        # ── Delete profile ────────────────────────────────────────────────────
+        with st.expander(t("sidebar.delete")):
+            st.warning(t("sidebar.delete_warn", name=chosen))
+            if st.button(t("sidebar.delete_confirm"), type="primary", use_container_width=True, disabled=_busy):
+                base = chosen[: -len("_profile.json")]
+                for suffix in ("_profile.json", "_diagnosis.json"):
+                    fpath = os.path.join(OUTPUT_DIR, base + suffix)
+                    if os.path.exists(fpath):
+                        os.remove(fpath)
+                st.session_state.active_profile = None
+                st.session_state.pop("profile_widget", None)
+                st.toast(t("sidebar.deleted", name=chosen))
+                st.rerun()
     else:
         st.caption(t("sidebar.no_profiles"))
 

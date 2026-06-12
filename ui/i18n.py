@@ -12,6 +12,10 @@ TRANSLATIONS = {
         "lang.label": "Language",
         "sidebar.profile": "Active Profile",
         "sidebar.no_profiles": "No profiles yet — run an analysis first.",
+        "sidebar.delete": "🗑 Delete profile",
+        "sidebar.delete_warn": "This permanently deletes **{name}** and its diagnosis. You can then re-run an analysis on the same nickname.",
+        "sidebar.delete_confirm": "Yes, delete",
+        "sidebar.deleted": "Deleted **{name}**.",
 
         # Home
         "home.title": "♟ Chess Strategic Profiler",
@@ -97,6 +101,7 @@ TRANSLATIONS = {
 
         # Diagnosis
         "diagnosis.title": "🧠 Diagnosis Report",
+        "diagnosis.running": "Running AI diagnosis — your profile above is ready to explore while this loads...",
         "diagnosis.no_files": "No saved diagnoses found in `output/`. Run an analysis from the **Analyze** section first.",
         "diagnosis.root_cause": "Root Cause",
         "diagnosis.confidence": "**{name}** · Confidence: {conf}",
@@ -123,6 +128,10 @@ TRANSLATIONS = {
         "lang.label": "Idioma",
         "sidebar.profile": "Perfil Ativo",
         "sidebar.no_profiles": "Nenhum perfil ainda — execute uma análise primeiro.",
+        "sidebar.delete": "🗑 Excluir perfil",
+        "sidebar.delete_warn": "Isto exclui permanentemente **{name}** e seu diagnóstico. Depois você pode reexecutar uma análise no mesmo apelido.",
+        "sidebar.delete_confirm": "Sim, excluir",
+        "sidebar.deleted": "**{name}** excluído.",
 
         # Home
         "home.title": "♟ Perfilador Estratégico de Xadrez",
@@ -208,6 +217,7 @@ TRANSLATIONS = {
 
         # Diagnosis
         "diagnosis.title": "🧠 Diagnóstico",
+        "diagnosis.running": "Executando diagnóstico da IA — seu perfil acima já pode ser explorado enquanto isto carrega...",
         "diagnosis.no_files": "Nenhum diagnóstico salvo encontrado em `output/`. Execute uma análise na seção **Analisar** primeiro.",
         "diagnosis.root_cause": "Causa Raiz",
         "diagnosis.confidence": "**{name}** · Confiança: {conf}",

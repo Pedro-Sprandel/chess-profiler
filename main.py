@@ -6,7 +6,7 @@ from modules.pgn_loader import load_games_from_file, iterate_positions
 from modules.chess_com_loader import fetch_recent_games
 from modules.position_analyzer import detect_concepts
 from modules.stockfish_validator import batch_validate, open_engine
-from modules.profile_builder import build_profile, save_profile
+from modules.profile_builder import build_profile, save_profile, load_profile
 from modules.ai_diagnostician import diagnose, load_silman_concepts
 from modules.db import Database
 
@@ -106,10 +106,13 @@ def _process_games(game_color_pairs: list, on_progress=None) -> list:
     return games_data
 
 
-def _finish_pipeline(games_data: list, name: str, source: str, on_progress=None):
+def _build_profile_phase(games_data: list, name: str, source: str, on_progress=None) -> dict:
     """
-    Persiste no SQLite, constrói o perfil, roda o diagnóstico da IA e salva os
-    arquivos de saída. Retorna (profile_dict, diagnosis_dict).
+    Persiste no SQLite, constrói o perfil de fraquezas e salva
+    output/{name}_profile.json. Não roda o diagnóstico da IA.
+
+    Esta é a fase "rápida" (local): tudo que a UI precisa para exibir o painel de
+    perfil e o explorador de partidas, antes de aguardar a chamada à API da IA.
     """
     # Persiste no SQLite
     _emit(on_progress, "profile", 0, 1, "[main] Persisting to database...")
@@ -130,7 +133,11 @@ def _finish_pipeline(games_data: list, name: str, source: str, on_progress=None)
     for w in profile["weaknesses"]:
         print(f"    - {w['concept']}: {w['error_occurrences']} erros ({w['error_rate']*100:.0f}% das ocorrências)")
 
-    # Diagnóstico pela IA
+    return profile
+
+
+def _diagnose_and_save(profile: dict, name: str, on_progress=None) -> dict:
+    """Roda o diagnóstico da IA sobre um perfil e salva output/{name}_diagnosis.json."""
     _emit(on_progress, "ai", 0, 1, "[main] Running AI diagnosis...")
     silman_concepts = load_silman_concepts()
     diagnosis = diagnose(profile, silman_concepts)
@@ -144,9 +151,49 @@ def _finish_pipeline(games_data: list, name: str, source: str, on_progress=None)
     print(f"Causa raiz: {_d['root_cause']['name']}")
     print(f"Confiança: {_d['confidence']}")
     _emit(on_progress, "done", 1, 1, "Analysis complete.")
+    return diagnosis
 
-    print(f"\nArquivos salvos em '{OUTPUT_DIR}/'")
-    return profile, diagnosis
+
+def run_diagnosis(name: str, on_progress=None) -> dict:
+    """
+    Carrega output/{name}_profile.json e roda apenas o diagnóstico da IA.
+
+    Usado pela UI para a segunda fase (progressiva): o perfil já foi construído e
+    exibido; esta chamada cobre só a espera pela API da Anthropic.
+    """
+    profile = load_profile(f"{OUTPUT_DIR}/{name}_profile.json")
+    return _diagnose_and_save(profile, name, on_progress)
+
+
+def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.WHITE, on_progress=None) -> dict:
+    """
+    Constrói (e salva) apenas o perfil de fraquezas a partir de um arquivo PGN,
+    sem rodar o diagnóstico da IA. Retorna o profile_dict.
+    """
+    print(f"\n=== Iniciando análise de {player_name} ===\n")
+
+    _emit(on_progress, "load", 0, 1, "Loading PGN file...")
+    games = load_games_from_file(pgn_path)
+    _emit(on_progress, "load", 1, 1, f"{len(games)} games loaded")
+
+    game_color_pairs = [(game, player_color) for game in games]
+    games_data = _process_games(game_color_pairs, on_progress)
+    return _build_profile_phase(games_data, player_name, "pgn", on_progress)
+
+
+def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=None) -> dict:
+    """
+    Constrói (e salva) apenas o perfil de fraquezas a partir de um username do
+    Chess.com, sem rodar o diagnóstico da IA. Retorna o profile_dict.
+    """
+    print(f"\n=== Iniciando análise de {username} via Chess.com API ===\n")
+
+    _emit(on_progress, "fetch", 0, 1, f"Fetching last {n_games} games from Chess.com...")
+    game_color_pairs = fetch_recent_games(username, n_games=n_games)
+    _emit(on_progress, "fetch", 1, 1, f"{len(game_color_pairs)} games loaded from Chess.com")
+
+    games_data = _process_games(game_color_pairs, on_progress)
+    return _build_profile_phase(games_data, username, "chess_com", on_progress)
 
 
 def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.WHITE, on_progress=None):
@@ -159,15 +206,10 @@ def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.W
     on_progress: optional callback(stage, current, total, message)
     Salva output/{player_name}_profile.json e output/{player_name}_diagnosis.json.
     """
-    print(f"\n=== Iniciando análise de {player_name} ===\n")
-
-    _emit(on_progress, "load", 0, 1, "Loading PGN file...")
-    games = load_games_from_file(pgn_path)
-    _emit(on_progress, "load", 1, 1, f"{len(games)} games loaded")
-
-    game_color_pairs = [(game, player_color) for game in games]
-    games_data = _process_games(game_color_pairs, on_progress)
-    return _finish_pipeline(games_data, player_name, "pgn", on_progress)
+    profile = analyze_profile(pgn_path, player_name, player_color, on_progress)
+    diagnosis = _diagnose_and_save(profile, player_name, on_progress)
+    print(f"\nArquivos salvos em '{OUTPUT_DIR}/'")
+    return profile, diagnosis
 
 
 def analyze_player_from_username(username: str, n_games: int = 50, on_progress=None):
@@ -181,14 +223,10 @@ def analyze_player_from_username(username: str, n_games: int = 50, on_progress=N
     n_games: quantas partidas recentes buscar (padrão: 50)
     on_progress: optional callback(stage, current, total, message)
     """
-    print(f"\n=== Iniciando análise de {username} via Chess.com API ===\n")
-
-    _emit(on_progress, "fetch", 0, 1, f"Fetching last {n_games} games from Chess.com...")
-    game_color_pairs = fetch_recent_games(username, n_games=n_games)
-    _emit(on_progress, "fetch", 1, 1, f"{len(game_color_pairs)} games loaded from Chess.com")
-
-    games_data = _process_games(game_color_pairs, on_progress)
-    return _finish_pipeline(games_data, username, "chess_com", on_progress)
+    profile = analyze_profile_from_username(username, n_games, on_progress)
+    diagnosis = _diagnose_and_save(profile, username, on_progress)
+    print(f"\nArquivos salvos em '{OUTPUT_DIR}/'")
+    return profile, diagnosis
 
 
 def _main(argv=None):

@@ -88,7 +88,10 @@ class Database:
     def __init__(self, path: str | Path = DEFAULT_DB_PATH):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.path))
+        # check_same_thread=False: the connection is a module-level singleton reused
+        # across Streamlit reruns, each of which may run on a different ScriptRunner
+        # thread. Streamlit serializes script runs, so access is never truly concurrent.
+        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
