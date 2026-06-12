@@ -4,7 +4,7 @@ import streamlit as st
 from main import analyze_profile, analyze_profile_from_username
 from ui.i18n import t
 from ui.profiles import make_profile_name
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, STOCKFISH_DEPTH
 
 
 def _run_with_progress(fn, **kwargs):
@@ -57,6 +57,7 @@ def _execute_pending():
     req = st.session_state.analysis_request
     owner = req.get("owner", "")
     try:
+        depth = req.get("depth", STOCKFISH_DEPTH)
         if req["kind"] == "chesscom":
             name = make_profile_name(owner, req["username"])
             profile = _run_with_progress(
@@ -64,6 +65,7 @@ def _execute_pending():
                 username=req["username"],
                 n_games=req["n_games"],
                 profile_name=name,
+                depth=depth,
             )
         else:
             name = make_profile_name(owner, req["player_name"])
@@ -72,6 +74,7 @@ def _execute_pending():
                 pgn_path=req["pgn_path"],
                 player_name=name,
                 player_color=req["player_color"],
+                depth=depth,
             )
 
         st.session_state.active_profile = f"{name}_profile.json"
@@ -132,6 +135,12 @@ def render():
         source_options = [t("analyze.source.chesscom"), t("analyze.source.pgn")]
         source = st.radio(t("analyze.source.label"), source_options, horizontal=True, key="analyze_source")
 
+        # Stockfish search depth — shared by both sources. Higher = more accurate
+        # (fewer shallow-search false positives) but slower.
+        depth = st.slider(t("analyze.depth.label"), min_value=8, max_value=16,
+                          value=STOCKFISH_DEPTH, step=1, key="analyze_depth",
+                          help=t("analyze.depth.help"))
+
         if source == t("analyze.source.chesscom"):
             username = st.text_input(t("analyze.username.label"), key="analyze_username")
             n_games = st.slider(t("analyze.ngames.label"), min_value=10, max_value=200, value=50, step=10, key="analyze_n_games")
@@ -141,7 +150,7 @@ def render():
                     st.error(t("analyze.error.no_user"))
                 else:
                     _queue({"kind": "chesscom", "username": username.strip(), "n_games": n_games,
-                            "owner": st.session_state.get("owner_name", "")})
+                            "owner": st.session_state.get("owner_name", ""), "depth": depth})
 
         else:
             pgn_file = st.file_uploader(t("analyze.pgn.label"), type=["pgn"], key="analyze_pgn_upload")
@@ -161,7 +170,7 @@ def render():
                     player_color = chess.WHITE if color == t("analyze.color.white") else chess.BLACK
                     _queue({"kind": "pgn", "pgn_path": pgn_path,
                             "player_name": player_name.strip(), "player_color": player_color,
-                            "owner": st.session_state.get("owner_name", "")})
+                            "owner": st.session_state.get("owner_name", ""), "depth": depth})
 
     # ── Load Saved Profile ────────────────────────────────────────────────────
     with tab_load:

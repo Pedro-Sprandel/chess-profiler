@@ -9,7 +9,7 @@ from modules.stockfish_validator import batch_validate, open_engine
 from modules.profile_builder import build_profile, save_profile, load_profile
 from modules.ai_diagnostician import diagnose, load_silman_concepts
 from modules.db import Database
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, STOCKFISH_DEPTH
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -57,12 +57,13 @@ def _persist_games_to_db(db: Database, games_data: list, source: str):
             db.insert_analysis_results_bulk(bulk_rows)
 
 
-def _process_games(game_color_pairs: list, on_progress=None) -> list:
+def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKFISH_DEPTH) -> list:
     """
     Analisa cada partida: detecta conceitos por posição e valida no Stockfish
     apenas as posições com pelo menos um conceito detectado.
 
     game_color_pairs: lista de (chess.pgn.Game, player_color bool)
+    depth: profundidade UCI usada na validação Stockfish.
     Retorna games_data — lista de dicts prontos para build_profile / persistência.
     Usa uma única instância do Stockfish para todas as partidas.
     """
@@ -89,7 +90,7 @@ def _process_games(game_color_pairs: list, on_progress=None) -> list:
 
             if positions_with_concepts:
                 idxs, boards, moves = zip(*positions_with_concepts)
-                validations = batch_validate(list(zip(boards, moves)), engine=engine)
+                validations = batch_validate(list(zip(boards, moves)), engine=engine, depth=depth)
                 for idx, validation in zip(idxs, validations):
                     game_positions[idx]["stockfish_validation"] = validation
 
@@ -169,42 +170,46 @@ def run_diagnosis(name: str, on_progress=None) -> dict:
     return _diagnose_and_save(profile, name, on_progress)
 
 
-def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.WHITE, on_progress=None) -> dict:
+def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.WHITE,
+                    on_progress=None, depth: int = STOCKFISH_DEPTH) -> dict:
     """
     Constrói (e salva) apenas o perfil de fraquezas a partir de um arquivo PGN,
     sem rodar o diagnóstico da IA. Retorna o profile_dict.
     """
-    print(f"\n=== Iniciando análise de {player_name} ===\n")
+    print(f"\n=== Iniciando análise de {player_name} (depth {depth}) ===\n")
 
     _emit(on_progress, "load", 0, 1, "Loading PGN file...")
     games = load_games_from_file(pgn_path)
     _emit(on_progress, "load", 1, 1, f"{len(games)} games loaded")
 
     game_color_pairs = [(game, player_color) for game in games]
-    games_data = _process_games(game_color_pairs, on_progress)
+    games_data = _process_games(game_color_pairs, on_progress, depth=depth)
     return _build_profile_phase(games_data, player_name, "pgn", on_progress)
 
 
 def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=None,
-                                  profile_name: str | None = None) -> dict:
+                                  profile_name: str | None = None,
+                                  depth: int = STOCKFISH_DEPTH) -> dict:
     """
     Constrói (e salva) apenas o perfil de fraquezas a partir de um username do
     Chess.com, sem rodar o diagnóstico da IA. Retorna o profile_dict.
 
     profile_name: nome usado para salvar o perfil (default: username). Permite à UI
     prefixar o perfil com o dono (namespacing por pessoa) sem afetar a busca.
+    depth: profundidade UCI da validação Stockfish.
     """
-    print(f"\n=== Iniciando análise de {username} via Chess.com API ===\n")
+    print(f"\n=== Iniciando análise de {username} via Chess.com API (depth {depth}) ===\n")
 
     _emit(on_progress, "fetch", 0, 1, f"Fetching last {n_games} games from Chess.com...")
     game_color_pairs = fetch_recent_games(username, n_games=n_games)
     _emit(on_progress, "fetch", 1, 1, f"{len(game_color_pairs)} games loaded from Chess.com")
 
-    games_data = _process_games(game_color_pairs, on_progress)
+    games_data = _process_games(game_color_pairs, on_progress, depth=depth)
     return _build_profile_phase(games_data, profile_name or username, "chess_com", on_progress)
 
 
-def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.WHITE, on_progress=None):
+def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.WHITE,
+                   on_progress=None, depth: int = STOCKFISH_DEPTH):
     """
     Pipeline completo de análise de um jogador a partir de um arquivo PGN.
 
@@ -212,15 +217,17 @@ def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.W
     player_name: nome do jogador (para identificação e nome dos arquivos de saída)
     player_color: chess.WHITE ou chess.BLACK
     on_progress: optional callback(stage, current, total, message)
+    depth: profundidade UCI da validação Stockfish.
     Salva output/{player_name}_profile.json e output/{player_name}_diagnosis.json.
     """
-    profile = analyze_profile(pgn_path, player_name, player_color, on_progress)
+    profile = analyze_profile(pgn_path, player_name, player_color, on_progress, depth=depth)
     diagnosis = _diagnose_and_save(profile, player_name, on_progress)
     print(f"\nArquivos salvos em '{OUTPUT_DIR}/'")
     return profile, diagnosis
 
 
-def analyze_player_from_username(username: str, n_games: int = 50, on_progress=None):
+def analyze_player_from_username(username: str, n_games: int = 50, on_progress=None,
+                                 depth: int = STOCKFISH_DEPTH):
     """
     Pipeline completo de análise a partir de um username do Chess.com.
 
@@ -230,8 +237,9 @@ def analyze_player_from_username(username: str, n_games: int = 50, on_progress=N
     username: nome de usuário no Chess.com
     n_games: quantas partidas recentes buscar (padrão: 50)
     on_progress: optional callback(stage, current, total, message)
+    depth: profundidade UCI da validação Stockfish.
     """
-    profile = analyze_profile_from_username(username, n_games, on_progress)
+    profile = analyze_profile_from_username(username, n_games, on_progress, depth=depth)
     diagnosis = _diagnose_and_save(profile, username, on_progress)
     print(f"\nArquivos salvos em '{OUTPUT_DIR}/'")
     return profile, diagnosis
@@ -244,16 +252,19 @@ def _main(argv=None):
     parser.add_argument("--pgn", help="Path to a local PGN file (overrides --user)")
     parser.add_argument("--color", choices=["white", "black"], default="white",
                         help="Player color when using --pgn (default: white)")
+    parser.add_argument("--depth", type=int, default=STOCKFISH_DEPTH,
+                        help=f"Stockfish search depth (default: {STOCKFISH_DEPTH})")
     args = parser.parse_args(argv)
 
     if args.pgn:
         analyze_player(
             pgn_path=args.pgn,
             player_name=args.user,
-            player_color=chess.WHITE if args.color == "white" else chess.BLACK
+            player_color=chess.WHITE if args.color == "white" else chess.BLACK,
+            depth=args.depth,
         )
     else:
-        analyze_player_from_username(username=args.user, n_games=args.games)
+        analyze_player_from_username(username=args.user, n_games=args.games, depth=args.depth)
 
 
 if __name__ == "__main__":

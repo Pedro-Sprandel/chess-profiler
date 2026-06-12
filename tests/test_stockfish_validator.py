@@ -184,3 +184,52 @@ class TestBatchValidate:
 
         assert "is_error" in results[0]
         assert "error_magnitude" in results[0]
+
+
+class TestErrorGuards:
+    """Guards in _classify that suppress non-instructive 'errors'."""
+
+    def test_winning_capture_detected(self):
+        from modules.stockfish_validator import _is_winning_capture
+        # Pawn takes bishop (1 -> 3): clearly winning capture.
+        b = chess.Board("rnbk2nr/pp4pp/2p2p2/4p3/4P3/2P1b3/PP3PPP/R3KBNR w KQ - 0 12")
+        assert _is_winning_capture(b, chess.Move.from_uci("f2e3")) is True
+
+    def test_equal_capture_not_winning(self):
+        from modules.stockfish_validator import _is_winning_capture
+        # Knight takes knight (equal) is not a "winning" capture.
+        b = chess.Board("rnbqkb1r/pppppppp/5n2/8/4N3/8/PPPPPPPP/R1BQKBNR w KQkq - 0 1")
+        assert _is_winning_capture(b, chess.Move.from_uci("e4f6")) is False
+
+    def test_non_capture_not_winning(self):
+        from modules.stockfish_validator import _is_winning_capture
+        b = chess.Board()
+        assert _is_winning_capture(b, chess.Move.from_uci("e2e4")) is False
+
+    def test_winning_capture_suppresses_error(self):
+        from modules.stockfish_validator import _classify
+        b = chess.Board("rnbk2nr/pp4pp/2p2p2/4p3/4P3/2P1b3/PP3PPP/R3KBNR w KQ - 0 12")
+        # white to move; eval drops 100cp but the move recovers a piece -> not an error
+        r = _classify(b, chess.Move.from_uci("f2e3"), 100, 0, chess.Move.from_uci("f1c4"))
+        assert r["is_error"] is False
+
+    def test_already_decided_suppresses_error(self):
+        from modules.stockfish_validator import _classify
+        b = chess.Board()  # white to move, non-capture move
+        # White already losing badly before AND after (both <= -600) -> noise, not an error
+        r = _classify(b, chess.Move.from_uci("e2e4"), -700, -820, chess.Move.from_uci("d2d4"))
+        assert r["is_error"] is False
+
+    def test_normal_error_still_flagged(self):
+        from modules.stockfish_validator import _classify
+        b = chess.Board()  # white to move, non-capture, position not decided
+        r = _classify(b, chess.Move.from_uci("e2e4"), 50, -120, chess.Move.from_uci("d2d4"))
+        assert r["is_error"] is True
+        assert r["error_magnitude"] == 170
+
+    def test_best_move_never_error(self):
+        from modules.stockfish_validator import _classify
+        b = chess.Board()
+        # Even a big swing: if the played move IS the best move, it's not an error.
+        r = _classify(b, chess.Move.from_uci("e2e4"), 500, -500, chess.Move.from_uci("e2e4"))
+        assert r["is_error"] is False

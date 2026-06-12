@@ -55,6 +55,11 @@ MATE_SCORE = 10000
 # Acima deste valor consideramos a avaliação como tática/decisiva (próxima de mate).
 TACTICAL_THRESHOLD_CP = 9000
 
+# Margem (cp) a partir da qual a posição é considerada "já decidida" (≈ 2 peças
+# menores). Se um lado já está ganhando/perdendo por mais que isso ANTES e DEPOIS
+# do lance, oscilações não são instrutivas e não são marcadas como erro.
+DECISIVE_THRESHOLD_CP = 600
+
 # Timeout (segundos) para chamadas HTTP à API do Chess.com.
 HTTP_TIMEOUT = 15
 
