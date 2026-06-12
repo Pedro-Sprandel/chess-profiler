@@ -23,7 +23,10 @@ VOLUME ["/data"]
 
 EXPOSE 8501
 
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true"]
+# Shell form so ${PORT} expands. Hosts (Render/Fly/Railway) inject $PORT; locally
+# it falls back to 8501.
+CMD streamlit run app.py \
+     --server.port=${PORT:-8501} \
+     --server.address=0.0.0.0 \
+     --server.headless=true \
+     --browser.gatherUsageStats=false
