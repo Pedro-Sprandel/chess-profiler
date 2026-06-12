@@ -118,10 +118,10 @@ class TestAppStartup:
         at.run()
         assert not at.exception
 
-    def test_default_language_is_english(self):
+    def test_default_language_is_portuguese(self):
         at = AppTest.from_file(APP_PATH, default_timeout=15)
         at.run()
-        assert at.session_state.lang == "en"
+        assert at.session_state.lang == "pt"
 
     def test_sidebar_language_radio_present(self):
         at = AppTest.from_file(APP_PATH, default_timeout=15)

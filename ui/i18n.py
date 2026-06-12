@@ -246,6 +246,6 @@ TRANSLATIONS = {
 
 
 def t(key: str, **kwargs) -> str:
-    lang = st.session_state.get("lang", "en")
-    text = TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
+    lang = st.session_state.get("lang", "pt")
+    text = TRANSLATIONS.get(lang, TRANSLATIONS["pt"]).get(key, key)
     return text.format(**kwargs) if kwargs else text

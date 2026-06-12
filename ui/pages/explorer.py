@@ -132,7 +132,7 @@ def render():
                 st.markdown(t("explorer.fen", v=fen))
 
             # ── Ask AI why this move is a mistake ─────────────────────────────
-            lang = st.session_state.get("lang", "en")
+            lang = st.session_state.get("lang", "pt")
             # Cache the explanation per position+language so it persists across reruns.
             cache_key = f"explain::{selected}::{selected_concept}::{i}::{lang}"
 

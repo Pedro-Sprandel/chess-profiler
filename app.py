@@ -42,7 +42,7 @@ if not _check_password():
 
 # ── Session state defaults ────────────────────────────────────────────────────
 if "lang" not in st.session_state:
-    st.session_state.lang = "en"
+    st.session_state.lang = "pt"
 
 if "active_profile" not in st.session_state:
     profile_files = sorted(

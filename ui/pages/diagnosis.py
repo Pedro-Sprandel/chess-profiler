@@ -56,7 +56,7 @@ def render():
         diagnosis_raw = json.load(f)
 
     # Bilingual format: {"en": {...}, "pt": {...}}; old files are flat dicts
-    lang = st.session_state.get("lang", "en")
+    lang = st.session_state.get("lang", "pt")
     if "en" in diagnosis_raw or "pt" in diagnosis_raw:
         diagnosis = diagnosis_raw.get(lang, diagnosis_raw.get("en", {}))
     else:
