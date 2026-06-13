@@ -18,9 +18,9 @@ TRANSLATIONS = {
         "sidebar.deleted": "Deleted **{name}**.",
 
         # Home
-        "home.title": "♟ Chess Strategic Profiler",
+        "home.title": "♟ Chess Profiler",
         "home.welcome": (
-            "Welcome to the **Chess Strategic Profiler** — a personalized strategic diagnostic system "
+            "Welcome to **Chess Profiler** — a personalized strategic diagnostic system "
             "for chess players based on Jeremy Silman's *The Amateur's Mind*.\n\n"
             "Use the sidebar to jump to any section:\n\n"
             "| Section | Description |\n"
@@ -124,7 +124,7 @@ TRANSLATIONS = {
 
     "pt": {
         # Sidebar
-        "nav.title": "♟ Perfilador de Xadrez",
+        "nav.title": "♟ Chess Profiler",
         "nav.home": "🏠 Início",
         "nav.analyze": "🔍 Analisar",
         "nav.profile": "📊 Painel de Perfil",
@@ -139,9 +139,9 @@ TRANSLATIONS = {
         "sidebar.deleted": "**{name}** excluído.",
 
         # Home
-        "home.title": "♟ Perfilador Estratégico de Xadrez",
+        "home.title": "♟ Chess Profiler",
         "home.welcome": (
-            "Bem-vindo ao **Perfilador Estratégico de Xadrez** — um sistema de diagnóstico estratégico "
+            "Bem-vindo ao **Chess Profiler** — um sistema de diagnóstico estratégico "
             "personalizado para jogadores de xadrez, baseado no livro *The Amateur's Mind* de Jeremy Silman.\n\n"
             "Use a barra lateral para navegar entre as seções:\n\n"
             "| Seção | Descrição |\n"
