@@ -249,6 +249,41 @@ class TestAllowedCheckmate:
         assert result["total_allowed_checkmates"] == 1
 
 
+class TestMissedTacticPrecedence:
+    # White to move; black bishop on f3 is hanging. Best move g5f3 (Nxf3) wins it.
+    _FEN = "r3k3/pp2r1pp/2pR4/2n1p1N1/2P1P3/nP3b2/P6P/2K3R1 w - - 5 25"
+
+    def _missed_tactic_position(self):
+        """An error where weak_square co-occurs but the real fault is a declined free capture."""
+        return {
+            "fen": self._FEN,
+            "move_played": "g1e1",
+            "concepts_detected": {"weak_square": {"detected": True}},
+            "stockfish_validation": {
+                "is_error": True,
+                "eval_before": 100,
+                "eval_after": -17,
+                "error_magnitude": 117,
+                "best_move": "g5f3",
+            },
+        }
+
+    def test_missed_tactic_attributed_to_its_own_concept(self):
+        from modules.profile_builder import build_profile
+        game = make_game("g1", [self._missed_tactic_position()] * 3)
+        result = build_profile([game])
+        concepts = {w["concept"] for w in result["weaknesses"]}
+        assert "missed_tactic" in concepts
+
+    def test_missed_tactic_does_not_leak_into_strategic_concept(self):
+        from modules.profile_builder import build_profile
+        game = make_game("g1", [self._missed_tactic_position()] * 3)
+        result = build_profile([game])
+        concepts = {w["concept"] for w in result["weaknesses"]}
+        # The error must NOT be counted against weak_square — that was the bug.
+        assert "weak_square" not in concepts
+
+
 class TestSaveAndLoadProfile:
     def test_save_profile_writes_valid_json(self):
         from modules.profile_builder import build_profile, save_profile

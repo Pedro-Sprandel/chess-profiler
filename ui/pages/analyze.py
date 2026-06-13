@@ -97,7 +97,6 @@ def _render_outcome():
         return
     if outcome["ok"]:
         st.success(t("analyze.success"))
-        st.json({"weaknesses_found": outcome["weaknesses_found"]})
         st.info(t("analyze.info.scroll"))
     else:
         st.error(t("analyze.error.failed", e=outcome["error"]))

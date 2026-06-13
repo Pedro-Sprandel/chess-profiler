@@ -85,6 +85,7 @@ class TestLoadSilmanConcepts:
             "passed_pawn", "doubled_pawn", "rook_on_7th",
             "bad_bishop", "pawn_majority", "piece_activity", "overloaded_piece",
             "hanging_piece", "backward_pawn", "center_control",
+            "missed_tactic",
         }
         assert set(result.keys()) == expected
 

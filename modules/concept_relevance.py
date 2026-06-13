@@ -123,6 +123,61 @@ def _concept_score(concepts: dict, concept_key: str) -> float:
     return 0.0
 
 
+# ── Tactical-first gate ───────────────────────────────────────────────────────
+# Material value of each piece type, used to decide whether a capture wins material.
+
+_PIECE_VALUES: dict[int, int] = {
+    chess.PAWN: 1,
+    chess.KNIGHT: 3,
+    chess.BISHOP: 3,
+    chess.ROOK: 5,
+    chess.QUEEN: 9,
+    chess.KING: 100,
+}
+
+
+def is_missed_tactic(
+    board_before: chess.Board,
+    move_played_uci: str,
+    best_move_uci: str,
+    player_color: bool,
+) -> bool:
+    """
+    Returns True when the best move was a material-winning capture the player declined.
+
+    Signals a *tactical* oversight — most often an enemy piece left hanging that the
+    player failed to grab — rather than a strategic misunderstanding. Such errors don't
+    belong to any Silman strategic concept; they map to the `missed_tactic` concept.
+
+    A capture wins material when the captured piece is either:
+      - undefended by the opponent (free material), or
+      - defended, but worth more than the capturing piece (favourable exchange).
+    """
+    if not best_move_uci or not move_played_uci:
+        return False
+    if move_played_uci == best_move_uci:
+        return False  # player found the tactic
+
+    try:
+        best_move = chess.Move.from_uci(best_move_uci)
+        if not board_before.is_capture(best_move):
+            return False
+
+        victim = board_before.piece_at(best_move.to_square)
+        attacker = board_before.piece_at(best_move.from_square)
+        if victim is None or attacker is None:
+            return False  # en passant / malformed — skip conservatively
+
+        opponent_color = not player_color
+        if board_before.is_attacked_by(opponent_color, best_move.to_square):
+            # Defended target — only a missed tactic if the exchange wins material.
+            return _PIECE_VALUES[victim.piece_type] > _PIECE_VALUES[attacker.piece_type]
+        return True  # undefended enemy piece — free material
+
+    except Exception:
+        return False  # on any parse error, don't claim a missed tactic
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def is_instructive(

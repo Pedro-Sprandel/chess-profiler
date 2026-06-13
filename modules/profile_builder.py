@@ -1,7 +1,7 @@
 import json
 import chess
 from config import MIN_OCCURRENCES, MAX_STAT_CP
-from modules.concept_relevance import is_instructive
+from modules.concept_relevance import is_instructive, is_missed_tactic
 
 
 def _player_eval(validation: dict, key: str, player_color_bool: bool) -> float:
@@ -29,6 +29,30 @@ def _is_allowed_checkmate(validation: dict, player_color_bool: bool) -> bool:
     before = _player_eval(validation, "eval_before", player_color_bool)
     after  = _player_eval(validation, "eval_after",  player_color_bool)
     return before <= -9000 or after <= -9000
+
+
+def _record_error(concept_stats: dict, concept_key: str, validation: dict,
+                  game: dict, fen, move_played, best_move):
+    """Credita uma ocorrência de erro a um conceito e guarda a posição de exemplo."""
+    stats = concept_stats.setdefault(concept_key, {
+        "total_occurrences": 0,
+        "error_occurrences": 0,
+        "total_error_magnitude": 0,
+        "positions": [],
+    })
+    stats["error_occurrences"] += 1
+    # Cap at MAX_STAT_CP so mate scores (≈10000 cp) don't skew the average
+    stats["total_error_magnitude"] += min(validation["error_magnitude"], MAX_STAT_CP)
+    stats["positions"].append({
+        "game_id": game["game_id"],
+        "white": game.get("white", "White"),
+        "black": game.get("black", "Black"),
+        "player_color": game.get("player_color", "white"),
+        "fen": fen,
+        "move_played": move_played,
+        "best_move": best_move,
+        "error_magnitude": validation["error_magnitude"],
+    })
 
 
 def build_profile(games_data: list) -> dict:
@@ -70,17 +94,19 @@ def build_profile(games_data: list) -> dict:
                 best_move = validation.get("best_move")
                 board = chess.Board(fen) if fen else None
 
+                # Tactical-first precedence: if the best move was a material-winning
+                # capture the player declined (e.g. an enemy piece left hanging), this
+                # is a tactical oversight, not a strategic one. Attribute it to the
+                # `missed_tactic` concept ONLY, so it doesn't leak into co-occurring
+                # strategic concepts (weak_square, king_safety, ...).
+                if board and is_missed_tactic(board, move_played, best_move, player_color_bool):
+                    _record_error(concept_stats, "missed_tactic", validation,
+                                  game, fen, move_played, best_move)
+                    continue
+
                 for concept_key, concept_data in concepts.items():
                     if not concept_data.get("detected", False):
                         continue
-
-                    if concept_key not in concept_stats:
-                        concept_stats[concept_key] = {
-                            "total_occurrences": 0,
-                            "error_occurrences": 0,
-                            "total_error_magnitude": 0,
-                            "positions": []
-                        }
 
                     # Gate the counter behind is_instructive — only count errors
                     # that are causally linked to the concept (move type + score delta)
@@ -88,23 +114,10 @@ def build_profile(games_data: list) -> dict:
                                                     concept_key, player_color_bool):
                         continue
 
-                    concept_stats[concept_key]["error_occurrences"] += 1
-                    # Cap at MAX_STAT_CP so mate scores (≈10000 cp) don't skew the average
-                    stat_magnitude = min(validation["error_magnitude"], MAX_STAT_CP)
-                    concept_stats[concept_key]["total_error_magnitude"] += stat_magnitude
-
                     # Store every instructive error position; the Game Explorer shows
                     # one per game by default and "loads more" up to all of them.
-                    concept_stats[concept_key]["positions"].append({
-                        "game_id": game["game_id"],
-                        "white": game.get("white", "White"),
-                        "black": game.get("black", "Black"),
-                        "player_color": game.get("player_color", "white"),
-                        "fen": fen,
-                        "move_played": move_played,
-                        "best_move": best_move,
-                        "error_magnitude": validation["error_magnitude"]
-                    })
+                    _record_error(concept_stats, concept_key, validation,
+                                  game, fen, move_played, best_move)
             else:
                 for concept_key, concept_data in concepts.items():
                     if concept_data.get("detected", False):

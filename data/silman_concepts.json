@@ -254,6 +254,21 @@
       ],
       "strategic_implications": "Peça pendurada é o erro mais custoso no xadrez amador: perde material sem contrapartida. O jogador deve verificar a segurança de todas as suas peças após cada lance do adversário, antes de escolher seu próprio lance.",
       "detection_key": "hanging_piece"
+    },
+    {
+      "id": "missed_tactic",
+      "name": "Tática Perdida",
+      "silman_chapter": 1,
+      "silman_page": 26,
+      "silman_category": "tática",
+      "description": "Oportunidade tática concreta deixada passar — tipicamente uma peça adversária pendurada que o jogador não capturou, ou uma troca que ganhava material.",
+      "characteristics": [
+        "O melhor lance era uma captura que ganhava material",
+        "A peça capturada estava indefesa, ou valia mais que a peça capturante",
+        "O jogador optou por outro lance, abrindo mão do ganho material"
+      ],
+      "strategic_implications": "Indica falha de visão tática/atenção, não de compreensão estratégica. Treina-se com exercícios de tática e checagem sistemática de capturas e ameaças antes de cada lance.",
+      "detection_key": "missed_tactic"
     }
   ]
 }

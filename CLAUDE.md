@@ -17,6 +17,7 @@ Partidas (Chess.com API ou PGN)
         ↓
 [1] Detecção determinística — position_analyzer.py
     17 detectores de conceitos Silman por posição (python-chess)
+    + conceito tático derivado (missed_tactic) por gate de precedência
         ↓
 [2] Validação quantitativa — stockfish_validator.py
     Confirma se houve erro real via Stockfish UCI (centipawns)
@@ -45,7 +46,7 @@ v1/
 ├── requirements.txt
 ├── .env                            ← ANTHROPIC_API_KEY (não versionado)
 ├── data/
-│   ├── silman_concepts.json        ← base de conhecimento: 17 conceitos em 5 categorias
+│   ├── silman_concepts.json        ← base de conhecimento: 18 conceitos (17 estratégicos + missed_tactic)
 │   └── profiler.db                 ← SQLite: cache Stockfish + posições + resultados
 ├── modules/
 │   ├── pgn_loader.py               ← carrega partidas de arquivo ou string PGN
@@ -71,9 +72,9 @@ v1/
 ├── tests/
 │   ├── test_position_analyzer.py   ← 59 testes com FENs conhecidas para os 17 detectores
 │   ├── test_stockfish_validator.py ← 11 testes (mock popen_uci + cache)
-│   ├── test_profile_builder.py     ← 10 testes
-│   ├── test_concept_relevance.py   ← 10 testes
-│   ├── test_ai_diagnostician.py    ← 9 testes (mock cliente Anthropic, formato bilíngue)
+│   ├── test_profile_builder.py     ← 26 testes (inclui precedência missed_tactic)
+│   ├── test_concept_relevance.py   ← 16 testes (inclui is_missed_tactic)
+│   ├── test_ai_diagnostician.py    ← 14 testes (mock cliente Anthropic, formato bilíngue)
 │   ├── test_chess_com_loader.py    ← 11 testes
 │   ├── test_pgn_loader.py          ← 11 testes
 │   ├── test_main.py                ← 10 testes (mocks externos)
@@ -133,7 +134,7 @@ python eval_fen.py "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 python eval_fen.py "<FEN>" --depth 15 --json
 
 # Testes
-pytest                          # 189 testes, todos passando
+pytest                          # 244 testes, todos passando
 pytest -v --tb=short
 pytest tests/test_position_analyzer.py -v
 pytest tests/test_pipeline_e2e.py -v   # requer Stockfish instalado
@@ -186,6 +187,18 @@ Os 17 conceitos detectados:
 | `overloaded_piece` | dinâmica |
 | `hanging_piece` | dinâmica |
 
+**Conceito tático derivado (não é detector de posição):**
+
+| detection_key | Categoria |
+|---|---|
+| `missed_tactic` | tática |
+
+`missed_tactic` **não** é detectado por `detect_concepts()` — é atribuído em
+`build_profile()` via `is_missed_tactic()` (ver abaixo) quando o melhor lance era uma
+captura que ganhava material e o jogador a recusou (ex.: peça adversária pendurada).
+Tem **precedência** sobre os conceitos estratégicos: um erro classificado como tático
+vai apenas para `missed_tactic` e não "vaza" para conceitos como `weak_square`.
+
 ### `modules/stockfish_validator.py`
 ```python
 open_engine() -> chess.engine.SimpleEngine
@@ -210,9 +223,17 @@ a `False` independentemente da diferença de avaliação (efeito horizonte em pr
 ### `modules/concept_relevance.py`
 ```python
 is_instructive(board_before, move_played_uci, best_move_uci, concept_key, player_color) -> bool
+is_missed_tactic(board_before, move_played_uci, best_move_uci, player_color) -> bool
 ```
 
-Três gates em ordem de custo crescente:
+`is_missed_tactic()` — `True` quando o melhor lance era uma **captura que ganha material**
+recusada pelo jogador. A captura ganha material quando a peça capturada está indefesa
+(material de graça) ou vale mais que a peça capturante (troca favorável). Retorna `False`
+se faltar `best_move`/`move_played`, se o jogador jogou o melhor lance, se o melhor lance
+não é captura, ou em troca de valor igual. Usada por `build_profile()` como gate de
+precedência tática antes dos conceitos estratégicos.
+
+`is_instructive()` — três gates em ordem de custo crescente:
 1. O jogador não jogou o melhor lance
 2. O melhor lance envolve o tipo de peça relevante para o conceito (ex: torre para `open_file`)
 3. O melhor lance melhora o score do conceito em pelo menos o threshold definido
@@ -229,9 +250,12 @@ Scoring para os novos conceitos:
 build_profile(games_data: list) -> dict
 # games_data: lista de dicts com game_id, white, black, player_color, positions
 # Cada position precisa de concepts_detected e stockfish_validation.
-# Só conta um erro para um conceito se is_instructive() retornar True.
+# Precedência tática: se is_missed_tactic() é True, o erro vai SÓ para o conceito
+#   missed_tactic e não é avaliado contra os conceitos estratégicos.
+# Caso contrário, só conta um erro para um conceito se is_instructive() retornar True.
 # Fraqueza só entra no perfil se error_occurrences >= MIN_OCCURRENCES (default: 3).
 # error_magnitude é capeada em MAX_STAT_CP=500 para avg_error_magnitude_cp.
+# (_record_error() é o helper interno que credita a ocorrência e guarda a posição.)
 
 save_profile(profile: dict, path: str)
 load_profile(path: str) -> dict
@@ -402,7 +426,8 @@ compatível com `db.py` (`insert_positions_bulk`).
 
 ## Base de Conhecimento (`data/silman_concepts.json`)
 
-17 conceitos extraídos manualmente de *The Amateur's Mind*. Cada entrada:
+18 conceitos: 17 estratégicos extraídos manualmente de *The Amateur's Mind* + 1 tático
+derivado (`missed_tactic`). Cada entrada:
 ```json
 {
   "id": "weak_square",
@@ -421,12 +446,19 @@ Os 3 conceitos adicionados após os 14 originais:
 - `backward_pawn` — "Peão Atrasado", cap. 5 p. 109, estrutura de peões
 - `center_control` — "Controle do Centro", cap. 2 p. 35, desequilíbrios estáticos
 
+Conceito tático derivado (atribuído por gate de precedência, não por detector de posição):
+- `missed_tactic` — "Tática Perdida", cap. 1 p. 26, categoria tática. Captura erros em
+  que o jogador deixou passar uma captura que ganhava material (ex.: peça pendurada do
+  adversário). Antes, esses erros vazavam para conceitos estratégicos (tipicamente
+  `weak_square`) por co-ocorrência. A taxa de erro desse conceito tende a ~100% pois
+  ele só é registrado quando há erro (não acumula `total_occurrences` de posições corretas).
+
 ---
 
 ## Testes
 
 ```bash
-pytest                                  # 189 testes, todos passando
+pytest                                  # 244 testes, todos passando
 pytest -v --tb=short
 pytest tests/test_position_analyzer.py  # 59 testes com FENs conhecidas
 pytest tests/test_pipeline_e2e.py -v    # integração real (requer Stockfish)
@@ -443,10 +475,10 @@ Cobertura por arquivo:
 | `test_pgn_loader.py` | 11 | Parsing PGN, iteração de posições |
 | `test_cli.py` | 11 | `_main(argv=...)`, roteamento pgn vs username, flags |
 | `test_chess_com_loader.py` | 11 | Mock HTTP, detecção de cor, limite n_games |
-| `test_profile_builder.py` | 10 | `make_position()` com `best_move=None` bypassa `is_instructive` |
+| `test_profile_builder.py` | 26 | `make_position()` bypassa `is_instructive`; checkmates; precedência `missed_tactic` |
+| `test_concept_relevance.py` | 16 | Gates causais, scoring por conceito, `is_missed_tactic` |
+| `test_ai_diagnostician.py` | 14 | Mock cliente Anthropic, formato bilíngue EN/PT |
 | `test_main.py` | 10 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games` |
-| `test_concept_relevance.py` | 10 | Gates causais, scoring por conceito |
-| `test_ai_diagnostician.py` | 9 | Mock cliente Anthropic, formato bilíngue EN/PT |
 | `test_diagnosis_card.py` | 6 | `format_root_cause`, `format_weakness_table`, `format_study_priority` |
 | `test_weakness_chart.py` | 6 | Figuras Plotly, ordenação, lista vazia |
 | `test_config.py` | 4 | Valores e tipos dos thresholds |
@@ -477,6 +509,10 @@ Observações:
 - Arquitetura híbrida de três camadas: detecção determinística → validação quantitativa → raciocínio causal
 - O LLM não gera texto pedagógico — atua como componente de raciocínio que classifica dados quantitativos brutos
 - `is_instructive()` estabelece vínculo causal entre erro e conceito (vs. mera co-ocorrência)
+- Precedência tática (`is_missed_tactic()`): erros táticos (captura ganhadora recusada) são
+  separados dos estratégicos via conceito `missed_tactic`, evitando que vazem para conceitos
+  como `weak_square` por co-ocorrência estrutural — distingue falha de visão tática de
+  incompreensão estratégica
 - A base de conhecimento do Silman é extraída manualmente para preservar fidelidade interpretativa
 - Diagnóstico bilíngue (EN/PT-BR) via uma única chamada à API, retrocompatível com arquivos legacy
 - Validação com jogadores reais do Chess.com em faixas de rating 400–1600

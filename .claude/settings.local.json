@@ -12,7 +12,13 @@
       "Bash(grep -v '\\\\.json$')",
       "Bash(python3:*)",
       "Bash(awk -F'::' '{print $1}')",
-      "Bash(pytest *)"
+      "Bash(pytest *)",
+      "Bash(DATA_DIR=/tmp/chesstest APP_PASSWORD=secret python *)",
+      "Bash(git restore *)",
+      "Bash(git push *)",
+      "Bash(git check-ignore *)",
+      "Bash(GIT_TERMINAL_PROMPT=0 timeout 20 git ls-remote origin -h)",
+      "Bash(echo \"exit: $?\")"
     ]
   },
   "enabledPlugins": {
