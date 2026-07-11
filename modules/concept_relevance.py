@@ -13,7 +13,7 @@ filtering out positions where the concept happened to be present but was
 unrelated to why the move was bad.
 """
 import chess
-from modules.position_analyzer import detect_concepts
+from modules.position_analyzer import detect_concepts, static_exchange_gain
 
 
 # ── Move-type constraints ─────────────────────────────────────────────────────
@@ -124,16 +124,38 @@ def _concept_score(concepts: dict, concept_key: str) -> float:
 
 
 # ── Tactical-first gate ───────────────────────────────────────────────────────
-# Material value of each piece type, used to decide whether a capture wins material.
 
-_PIECE_VALUES: dict[int, int] = {
-    chess.PAWN: 1,
-    chess.KNIGHT: 3,
-    chess.BISHOP: 3,
-    chess.ROOK: 5,
-    chess.QUEEN: 9,
-    chess.KING: 100,
+_CAPTURE_VALUE: dict[int, int] = {
+    chess.PAWN: 100,
+    chess.KNIGHT: 300,
+    chess.BISHOP: 300,
+    chess.ROOK: 500,
+    chess.QUEEN: 900,
+    chess.KING: 10000,
 }
+
+
+def _is_material_winning_capture(board_before: chess.Board, move: chess.Move) -> bool:
+    """
+    True when `move` is a capture that wins material for the side to move,
+    accounting for the full recapture sequence via SEE: the value captured must
+    exceed what the opponent recovers recapturing on the destination square.
+    """
+    if not board_before.is_capture(move):
+        return False
+
+    if board_before.is_en_passant(move):
+        victim_value = _CAPTURE_VALUE[chess.PAWN]
+    else:
+        victim = board_before.piece_at(move.to_square)
+        if victim is None:
+            return False
+        victim_value = _CAPTURE_VALUE[victim.piece_type]
+
+    board_after = board_before.copy(stack=False)
+    board_after.push(move)
+    opponent_recovers = static_exchange_gain(board_after, move.to_square, board_after.turn)
+    return victim_value - opponent_recovers > 0
 
 
 def is_missed_tactic(
@@ -149,9 +171,8 @@ def is_missed_tactic(
     player failed to grab — rather than a strategic misunderstanding. Such errors don't
     belong to any Silman strategic concept; they map to the `missed_tactic` concept.
 
-    A capture wins material when the captured piece is either:
-      - undefended by the opponent (free material), or
-      - defended, but worth more than the capturing piece (favourable exchange).
+    "Wins material" is decided by static exchange evaluation (SEE) on the capture
+    square, so multi-piece recapture sequences are accounted for.
     """
     if not best_move_uci or not move_played_uci:
         return False
@@ -160,22 +181,34 @@ def is_missed_tactic(
 
     try:
         best_move = chess.Move.from_uci(best_move_uci)
-        if not board_before.is_capture(best_move):
-            return False
-
-        victim = board_before.piece_at(best_move.to_square)
-        attacker = board_before.piece_at(best_move.from_square)
-        if victim is None or attacker is None:
-            return False  # en passant / malformed — skip conservatively
-
-        opponent_color = not player_color
-        if board_before.is_attacked_by(opponent_color, best_move.to_square):
-            # Defended target — only a missed tactic if the exchange wins material.
-            return _PIECE_VALUES[victim.piece_type] > _PIECE_VALUES[attacker.piece_type]
-        return True  # undefended enemy piece — free material
-
+        return _is_material_winning_capture(board_before, best_move)
     except Exception:
         return False  # on any parse error, don't claim a missed tactic
+
+
+def is_converted_tactic(
+    board_before: chess.Board,
+    move_played_uci: str,
+    best_move_uci: str,
+    player_color: bool,
+) -> bool:
+    """
+    Returns True when the player PLAYED a material-winning capture that was the
+    best move — a tactical opportunity converted.
+
+    Counterpart of is_missed_tactic: together they define the denominator of the
+    `missed_tactic` error rate (opportunities seen vs. opportunities missed).
+    """
+    if not best_move_uci or not move_played_uci:
+        return False
+    if move_played_uci != best_move_uci:
+        return False
+
+    try:
+        best_move = chess.Move.from_uci(best_move_uci)
+        return _is_material_winning_capture(board_before, best_move)
+    except Exception:
+        return False
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

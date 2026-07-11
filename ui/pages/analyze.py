@@ -1,4 +1,6 @@
 import os
+import tempfile
+
 import chess
 import streamlit as st
 from main import analyze_profile, analyze_profile_from_username
@@ -162,9 +164,10 @@ def render():
                 elif not player_name.strip():
                     st.error(t("analyze.error.no_name"))
                 else:
-                    pgn_path = f"/tmp/{pgn_file.name}"
-                    with open(pgn_path, "wb") as f:
+                    # tempfile evita colisão de nomes entre usuários simultâneos
+                    with tempfile.NamedTemporaryFile(suffix=".pgn", delete=False) as f:
                         f.write(pgn_file.read())
+                        pgn_path = f.name
                     player_color = chess.WHITE if color == t("analyze.color.white") else chess.BLACK
                     name = make_profile_name(player_name.strip(), depth)
                     _queue({"kind": "pgn", "pgn_path": pgn_path,

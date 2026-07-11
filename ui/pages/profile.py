@@ -2,8 +2,15 @@ import os
 import json
 import pandas as pd
 import streamlit as st
-from ui.components.weakness_chart import build_error_count_chart, build_error_magnitude_chart
+from ui.components.weakness_chart import (
+    build_error_count_chart,
+    build_error_magnitude_chart,
+    build_category_radar,
+    build_comparison_chart,
+)
 from ui.i18n import t
+from ui.concepts import concept_label
+from ui.profiles import display_label
 from config import OUTPUT_DIR
 
 
@@ -23,6 +30,16 @@ def render():
 
     with open(profile_path, "r", encoding="utf-8") as f:
         profile = json.load(f)
+
+    # ── Metadata caption ──────────────────────────────────────────────────────
+    meta = profile.get("metadata", {})
+    if profile.get("generated_at") or meta:
+        st.caption(t(
+            "profile.meta",
+            when=profile.get("generated_at", "?"),
+            source=meta.get("source", "?"),
+            depth=meta.get("depth", "?"),
+        ))
 
     # ── Metrics row ───────────────────────────────────────────────────────────
     col1, col2, col3, col4, col5, col6 = st.columns(6)
@@ -50,12 +67,14 @@ def render():
     with col_right:
         st.plotly_chart(build_error_magnitude_chart(weaknesses), use_container_width=True)
 
+    st.plotly_chart(build_category_radar(weaknesses), use_container_width=True)
+
     # ── Error rate table ──────────────────────────────────────────────────────
     st.subheader(t("profile.table.subheader"))
 
     rows = [
         {
-            t("profile.col.concept"):    w["concept"].replace("_", " ").title(),
+            t("profile.col.concept"):    concept_label(w["concept"]),
             t("profile.col.error_occ"):  w["error_occurrences"],
             t("profile.col.total_occ"):  w["total_occurrences"],
             t("profile.col.error_rate"): round(w["error_rate"] * 100, 1),
@@ -84,3 +103,32 @@ def render():
         use_container_width=True,
         hide_index=True,
     )
+
+    # ── Profile comparison ────────────────────────────────────────────────────
+    all_profiles = sorted(
+        f for f in os.listdir(OUTPUT_DIR) if f.endswith("_profile.json")
+    ) if os.path.isdir(OUTPUT_DIR) else []
+
+    if len(all_profiles) >= 2:
+        st.divider()
+        st.subheader(t("profile.compare.subheader"))
+        chosen = st.multiselect(
+            t("profile.compare.label"),
+            all_profiles,
+            default=[selected] if selected in all_profiles else [],
+            format_func=display_label,
+            key="profile_compare_select",
+        )
+        if len(chosen) >= 2:
+            series = []
+            for fname in chosen:
+                try:
+                    with open(os.path.join(OUTPUT_DIR, fname), "r", encoding="utf-8") as f:
+                        p = json.load(f)
+                    series.append((display_label(fname), p.get("weaknesses", [])))
+                except (OSError, json.JSONDecodeError):
+                    continue
+            if len(series) >= 2:
+                st.plotly_chart(build_comparison_chart(series), use_container_width=True)
+        else:
+            st.caption(t("profile.compare.hint"))

@@ -37,8 +37,23 @@ APP_PASSWORD = os.getenv("APP_PASSWORD")
 # 10 é suficiente para detectar erros estratégicos; aumente para 15+ se quiser mais precisão
 STOCKFISH_DEPTH = 10
 
-# Limiar de erro: diferença de centipawns para considerar lance ruim
+# Profundidade da passada de confirmação: erros flagados na triagem (STOCKFISH_DEPTH)
+# são re-validados nesta profundidade para eliminar falsos positivos de horizonte.
+# Só roda sobre os lances já marcados como erro (~fração pequena das posições).
+STOCKFISH_CONFIRM_DEPTH = 16
+
+# Limiar de erro: diferença de centipawns para considerar lance ruim (piso absoluto)
 ERROR_THRESHOLD_CP = 50
+
+# Limiar de erro em probabilidade de vitória: um lance só é erro se reduzir a
+# probabilidade de vitória do jogador em mais que este delta (modelo Lichess:
+# WinP = 1/(1+e^(-0.00368*cp))). Normaliza o erro pelo contexto da posição —
+# perder 60cp em posição igual é grave; perder 60cp já com +4 é irrelevante.
+WINP_ERROR_THRESHOLD = 0.10
+
+# Lances iniciais ignorados pela análise (teoria de abertura). Conceitos
+# estratégicos disparando em lances de livro são ruído, não fraqueza do jogador.
+OPENING_MOVES_TO_SKIP = 6
 
 # Número mínimo de ocorrências para considerar uma fraqueza recorrente
 MIN_OCCURRENCES = 3
@@ -54,11 +69,6 @@ MATE_SCORE = 10000
 
 # Acima deste valor consideramos a avaliação como tática/decisiva (próxima de mate).
 TACTICAL_THRESHOLD_CP = 9000
-
-# Margem (cp) a partir da qual a posição é considerada "já decidida" (≈ 2 peças
-# menores). Se um lado já está ganhando/perdendo por mais que isso ANTES e DEPOIS
-# do lance, oscilações não são instrutivas e não são marcadas como erro.
-DECISIVE_THRESHOLD_CP = 600
 
 # Timeout (segundos) para chamadas HTTP à API do Chess.com.
 HTTP_TIMEOUT = 15

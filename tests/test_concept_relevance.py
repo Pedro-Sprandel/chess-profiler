@@ -1,7 +1,12 @@
 """Tests for concept_relevance instructive position filtering."""
 import chess
 import pytest
-from modules.concept_relevance import is_instructive, is_missed_tactic, _concept_score
+from modules.concept_relevance import (
+    is_instructive,
+    is_missed_tactic,
+    is_converted_tactic,
+    _concept_score,
+)
 
 
 # ── _concept_score ────────────────────────────────────────────────────────────
@@ -102,3 +107,27 @@ def test_equal_trade_of_defended_piece_is_not_a_miss():
 def test_invalid_uci_does_not_crash_missed_tactic():
     board = chess.Board()
     assert is_missed_tactic(board, "invalid", "e2e4", chess.WHITE) is False
+
+
+def test_multi_recapture_sequence_not_a_winning_capture():
+    # NxN where the knight is defended twice and white has no follow-up:
+    # SEE says the exchange is equal, so declining it is not a missed tactic.
+    board = chess.Board("4k3/2p1p3/3n4/8/4N3/8/3K4/8 w - - 0 1")
+    assert is_missed_tactic(board, "d2d3", "e4d6", chess.WHITE) is False
+
+
+# ── is_converted_tactic ───────────────────────────────────────────────────────
+
+def test_playing_winning_capture_is_converted_tactic():
+    board = chess.Board(_HANGING_BISHOP_FEN)
+    assert is_converted_tactic(board, "g5f3", "g5f3", chess.WHITE) is True
+
+
+def test_declining_winning_capture_is_not_converted():
+    board = chess.Board(_HANGING_BISHOP_FEN)
+    assert is_converted_tactic(board, "g1e1", "g5f3", chess.WHITE) is False
+
+
+def test_playing_best_non_capture_is_not_converted():
+    board = chess.Board()
+    assert is_converted_tactic(board, "e2e4", "e2e4", chess.WHITE) is False

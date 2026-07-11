@@ -37,27 +37,44 @@ class TestDetectWeakSquares:
         assert "squares" in result
         assert "count" in result
 
-    def test_starting_position_has_no_weak_squares_for_white(self):
-        # In starting position white pawns cover most squares — weak squares list may vary,
-        # but we just verify the structure is correct
+    def test_starting_position_has_no_weak_squares(self):
+        # Starting position: no opponent piece can reach the hole zone yet
         from modules.position_analyzer import detect_weak_squares
         board = chess.Board()
-        result = detect_weak_squares(board, chess.WHITE)
-        assert isinstance(result["squares"], list)
-        assert isinstance(result["count"], int)
+        assert detect_weak_squares(board, chess.WHITE)["count"] == 0
+        assert detect_weak_squares(board, chess.BLACK)["count"] == 0
 
-    def test_position_with_clear_weak_square(self):
-        # After removing all white pawns, many squares become weak
+    def test_hole_in_own_camp_detected(self):
+        # White pawns on c4/e4 leave d4 a permanent hole (neither pawn can ever
+        # defend it) and the black knight on c6 can occupy it.
         from modules.position_analyzer import detect_weak_squares
-        board = chess.Board()
-        # Remove all white pawns
-        for sq in chess.SQUARES:
-            piece = board.piece_at(sq)
-            if piece and piece.piece_type == chess.PAWN and piece.color == chess.WHITE:
-                board.remove_piece_at(sq)
+        board = chess.Board("1k6/8/2n5/8/2P1P3/8/8/1K6 w - - 0 1")
         result = detect_weak_squares(board, chess.WHITE)
-        assert result["count"] > 0
         assert result["detected"] is True
+        assert "d4" in result["squares"]
+
+    def test_hole_defensible_by_pawn_behind_not_weak(self):
+        # Same structure but the white pawn is on c2: it can advance to c3 and
+        # defend d4 — not a permanent hole.
+        from modules.position_analyzer import detect_weak_squares
+        board = chess.Board("1k6/8/2n5/8/4P3/8/2P5/1K6 w - - 0 1")
+        result = detect_weak_squares(board, chess.WHITE)
+        assert "d4" not in result["squares"]
+
+    def test_hole_occupied_by_enemy_piece_is_weak(self):
+        # Black knight already installed on d4 (white has no pawn able to defend it)
+        from modules.position_analyzer import detect_weak_squares
+        board = chess.Board("1k6/8/8/8/2PnP3/8/8/1K6 w - - 0 1")
+        result = detect_weak_squares(board, chess.WHITE)
+        assert "d4" in result["squares"]
+
+    def test_black_camp_hole_detected(self):
+        # Mirror: black pawns c5/e5 leave d5 a hole; white knight on c3 eyes d5.
+        from modules.position_analyzer import detect_weak_squares
+        board = chess.Board("1k6/8/8/2p1p3/8/2N5/8/1K6 b - - 0 1")
+        result = detect_weak_squares(board, chess.BLACK)
+        assert result["detected"] is True
+        assert "d5" in result["squares"]
 
 
 # --- detect_open_files ---
@@ -168,9 +185,9 @@ class TestDetectKnightOutpost:
         assert result["detected"] is False
 
     def test_knight_outpost_detected(self):
-        # White knight on e5 (rank 4), no black pawn on d6 or f6
+        # White knight on e5 supported by the d4 pawn, no black pawn can ever attack e5
         from modules.position_analyzer import detect_knight_outpost
-        board = chess.Board(fen="k7/8/8/4N3/8/8/8/K7 w - - 0 1")
+        board = chess.Board(fen="k7/8/8/4N3/3P4/8/8/K7 w - - 0 1")
         result = detect_knight_outpost(board, chess.WHITE)
         assert result["detected"] is True
         assert "e5" in result["squares"]
@@ -178,9 +195,31 @@ class TestDetectKnightOutpost:
     def test_no_outpost_when_attacked_by_pawn(self):
         # White knight on e5 but black pawn on d6 can attack it
         from modules.position_analyzer import detect_knight_outpost
-        board = chess.Board(fen="k7/8/3p4/4N3/8/8/8/K7 w - - 0 1")
+        board = chess.Board(fen="k7/8/3p4/4N3/3P4/8/8/K7 w - - 0 1")
         result = detect_knight_outpost(board, chess.WHITE)
         assert "e5" not in result["squares"]
+
+    def test_no_outpost_when_enemy_pawn_can_advance_to_attack(self):
+        # Black pawn on d7 can advance to d6 and kick the knight — not an outpost
+        from modules.position_analyzer import detect_knight_outpost
+        board = chess.Board(fen="k7/3p4/8/4N3/3P4/8/8/K7 w - - 0 1")
+        result = detect_knight_outpost(board, chess.WHITE)
+        assert "e5" not in result["squares"]
+
+    def test_no_outpost_without_pawn_support(self):
+        # Safe from pawns but unsupported — Silman requires a pawn anchoring it
+        from modules.position_analyzer import detect_knight_outpost
+        board = chess.Board(fen="k7/8/8/4N3/8/8/8/K7 w - - 0 1")
+        result = detect_knight_outpost(board, chess.WHITE)
+        assert "e5" not in result["squares"]
+
+    def test_enemy_pawn_already_past_does_not_prevent_outpost(self):
+        # Black pawn on d4 has already passed e5's attack zone; white pawn f4
+        # supports the knight — outpost stands
+        from modules.position_analyzer import detect_knight_outpost
+        board = chess.Board(fen="k7/8/8/4N3/3p1P2/8/8/K7 w - - 0 1")
+        result = detect_knight_outpost(board, chess.WHITE)
+        assert "e5" in result["squares"]
 
 
 # --- detect_king_safety ---
@@ -230,6 +269,37 @@ class TestDetectKingSafety:
         board = chess.Board(fen="k7/8/8/8/8/8/8/4K3 w - - 0 1")
         result = detect_king_safety(board, chess.WHITE)
         assert result["king_square"] == "e1"
+
+    def test_open_file_near_king_flags_exposure(self):
+        # Kg1 with f2/g2 shield (2 pawns) but the h-file has no white pawn:
+        # an open avenue right next to the king, black queen on the board
+        from modules.position_analyzer import detect_king_safety
+        board = chess.Board(fen="3q3k/8/8/8/8/8/5PP1/6K1 w - - 0 1")
+        result = detect_king_safety(board, chess.WHITE)
+        assert result["detected"] is True
+        assert "h" in result["open_files_near_king"]
+
+    def test_castled_king_full_shield_not_exposed(self):
+        from modules.position_analyzer import detect_king_safety
+        board = chess.Board(fen="3q3k/8/8/8/8/8/5PPP/6K1 w - - 0 1")
+        result = detect_king_safety(board, chess.WHITE)
+        assert result["detected"] is False
+        assert result["has_castled_position"] is True
+
+    def test_king_stuck_in_center_flagged(self):
+        # Ke1 with full shield but castling rights gone and enemy queen present
+        from modules.position_analyzer import detect_king_safety
+        board = chess.Board(fen="3qk3/8/8/8/8/8/3PPP2/4K3 w - - 0 1")
+        result = detect_king_safety(board, chess.WHITE)
+        assert result["king_in_center"] is True
+        assert result["detected"] is True
+
+    def test_king_in_center_with_castling_rights_not_flagged(self):
+        # Same position but castling rights still available — can still castle away
+        from modules.position_analyzer import detect_king_safety
+        board = chess.Board(fen="3qk3/8/8/8/8/8/3PPP2/R3K2R w KQ - 0 1")
+        result = detect_king_safety(board, chess.WHITE)
+        assert result["king_in_center"] is False
 
 
 # --- detect_space_advantage ---
@@ -306,6 +376,42 @@ class TestDetectHangingPiece:
         result = detect_hanging_piece(board, chess.WHITE)
         assert result["detected"] is True
         assert "e4" in result["squares"]
+
+    def test_defended_piece_attacked_by_cheaper_piece_is_hanging(self):
+        # White Ne4 defended by Bg2 but attacked by the black d5 pawn:
+        # pawn takes knight wins material even after the recapture (SEE > 0)
+        from modules.position_analyzer import detect_hanging_piece
+        board = chess.Board("7k/8/8/3p4/4N3/8/6B1/6K1 w - - 0 1")
+        result = detect_hanging_piece(board, chess.WHITE)
+        assert result["detected"] is True
+        assert "e4" in result["squares"]
+
+
+# --- static_exchange_gain ---
+
+class TestStaticExchangeGain:
+    def test_free_piece_full_value(self):
+        # Black bishop c6 attacks undefended white Ne4
+        from modules.position_analyzer import static_exchange_gain
+        board = chess.Board("8/8/2b5/8/4N3/8/8/6K1 w - - 0 1")
+        assert static_exchange_gain(board, chess.E4, chess.BLACK) == 300
+
+    def test_defended_equal_piece_zero(self):
+        # Bc6 takes Ne4, Bg2 recaptures: 300 - 300 = 0
+        from modules.position_analyzer import static_exchange_gain
+        board = chess.Board("8/8/2b5/8/4N3/8/6B1/6K1 w - - 0 1")
+        assert static_exchange_gain(board, chess.E4, chess.BLACK) == 0
+
+    def test_pawn_takes_defended_knight_wins(self):
+        # d5 pawn takes Ne4, Bg2 recaptures the pawn: 300 - 100 = 200
+        from modules.position_analyzer import static_exchange_gain
+        board = chess.Board("7k/8/8/3p4/4N3/8/6B1/6K1 w - - 0 1")
+        assert static_exchange_gain(board, chess.E4, chess.BLACK) == 200
+
+    def test_no_attackers_returns_zero(self):
+        from modules.position_analyzer import static_exchange_gain
+        board = chess.Board()
+        assert static_exchange_gain(board, chess.E2, chess.BLACK) == 0
 
 
 # --- detect_doubled_pawns ---

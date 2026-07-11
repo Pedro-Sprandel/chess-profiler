@@ -49,13 +49,27 @@ class TestValidateMove:
         move = chess.Move.from_uci("e2e4")
 
         # best_move differs from played move so played_best=False;
-        # score drops 100cp for white → magnitude = 100 > 50 threshold
+        # score drops from +100 to -80 → magnitude 180 > 50 AND the win
+        # probability drops ~16 percentage points (> WINP_ERROR_THRESHOLD)
         with patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci") as mock_popen:
-            mock_popen.return_value = make_mock_engine(200, 100, best_move_uci="d2d4")
+            mock_popen.return_value = make_mock_engine(100, -80, best_move_uci="d2d4")
             result = validate_move(board, move)
 
         assert result["is_error"] is True
         assert result["error_magnitude"] > 50
+
+    def test_small_winp_drop_in_winning_position_not_error(self):
+        from modules.stockfish_validator import validate_move
+        board = chess.Board()
+        move = chess.Move.from_uci("e2e4")
+
+        # Dropping 100cp while still clearly better (+200 → +100) barely moves
+        # the win probability — not an instructive error under ΔWinP.
+        with patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci") as mock_popen:
+            mock_popen.return_value = make_mock_engine(200, 100, best_move_uci="d2d4")
+            result = validate_move(board, move)
+
+        assert result["is_error"] is False
 
     def test_is_error_false_when_magnitude_within_threshold(self):
         from modules.stockfish_validator import validate_move
@@ -186,6 +200,102 @@ class TestBatchValidate:
         assert "error_magnitude" in results[0]
 
 
+class TestConfirmationPass:
+    """Second-pass deep validation of screened errors in batch_validate."""
+
+    @staticmethod
+    def _info(score_cp, best_uci):
+        info = {"score": MagicMock(), "pv": [chess.Move.from_uci(best_uci)]}
+        info["score"].white.return_value.score.return_value = score_cp
+        return info
+
+    def test_confirm_pass_clears_horizon_false_positive(self):
+        """Screening flags an error, but the deeper pass shows a small swing → cleared."""
+        from modules.stockfish_validator import batch_validate
+        board = chess.Board()
+        move = chess.Move.from_uci("e2e4")
+
+        engine = MagicMock()
+        engine.analyse.side_effect = [
+            self._info(100, "d2d4"),    # screening: before (+100, best d2d4)
+            self._info(-100, "d2d4"),   # screening: after (-100) → flagged as error
+            [self._info(100, "d2d4"),   # confirm (multipv): best line
+             self._info(80, "g1f3")],   # confirm (multipv): 2nd best
+            self._info(70, "d2d4"),     # confirm: after (+70) → magnitude 30 < 50
+        ]
+
+        with patch("modules.stockfish_validator._get_db", return_value=None), \
+             patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci",
+                   return_value=engine):
+            results = batch_validate([(board, move)], depth=10, confirm_depth=16)
+
+        assert results[0]["is_error"] is False
+        assert engine.analyse.call_count == 4
+
+    def test_confirm_pass_keeps_real_error(self):
+        """A real blunder survives the deeper pass."""
+        from modules.stockfish_validator import batch_validate
+        board = chess.Board()
+        move = chess.Move.from_uci("e2e4")
+
+        engine = MagicMock()
+        engine.analyse.side_effect = [
+            self._info(100, "d2d4"),     # screening: before
+            self._info(-200, "d2d4"),    # screening: after → error
+            [self._info(100, "d2d4"),    # confirm: best
+             self._info(-150, "g1f3")],  # confirm: distant 2nd best
+            self._info(-180, "d2d4"),    # confirm: after → still a big drop
+        ]
+
+        with patch("modules.stockfish_validator._get_db", return_value=None), \
+             patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci",
+                   return_value=engine):
+            results = batch_validate([(board, move)], depth=10, confirm_depth=16)
+
+        assert results[0]["is_error"] is True
+
+    def test_second_best_with_small_gap_not_an_error(self):
+        """Played move was the engine's close 2nd choice → hard position, not error."""
+        from modules.stockfish_validator import batch_validate
+        board = chess.Board()
+        move = chess.Move.from_uci("e2e4")
+
+        engine = MagicMock()
+        engine.analyse.side_effect = [
+            self._info(100, "d2d4"),    # screening: before
+            self._info(-100, "d2d4"),   # screening: after → flagged
+            [self._info(100, "d2d4"),   # confirm: best
+             self._info(70, "e2e4")],   # confirm: played move is 2nd best, gap 30 ≤ 50
+            self._info(-100, "d2d4"),   # confirm: after (would still classify as error)
+        ]
+
+        with patch("modules.stockfish_validator._get_db", return_value=None), \
+             patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci",
+                   return_value=engine):
+            results = batch_validate([(board, move)], depth=10, confirm_depth=16)
+
+        assert results[0]["is_error"] is False
+
+    def test_no_confirm_pass_when_depths_equal(self):
+        from modules.stockfish_validator import batch_validate
+        board = chess.Board()
+        move = chess.Move.from_uci("e2e4")
+
+        engine = MagicMock()
+        engine.analyse.side_effect = [
+            self._info(100, "d2d4"),
+            self._info(-100, "d2d4"),
+        ]
+
+        with patch("modules.stockfish_validator._get_db", return_value=None), \
+             patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci",
+                   return_value=engine):
+            results = batch_validate([(board, move)], depth=10, confirm_depth=10)
+
+        assert results[0]["is_error"] is True
+        assert engine.analyse.call_count == 2
+
+
 class TestErrorGuards:
     """Guards in _classify that suppress non-instructive 'errors'."""
 
@@ -216,7 +326,8 @@ class TestErrorGuards:
     def test_already_decided_suppresses_error(self):
         from modules.stockfish_validator import _classify
         b = chess.Board()  # white to move, non-capture move
-        # White already losing badly before AND after (both <= -600) -> noise, not an error
+        # White already losing badly before AND after: the cp swing barely moves
+        # the win probability (ΔWinP ≈ 0.03 < threshold) -> noise, not an error
         r = _classify(b, chess.Move.from_uci("e2e4"), -700, -820, chess.Move.from_uci("d2d4"))
         assert r["is_error"] is False
 

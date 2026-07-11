@@ -176,6 +176,26 @@ class Database:
         self._conn.commit()
         return cur.lastrowid
 
+    def find_position(self, fen: str, move_played: str | None = None,
+                      white: str | None = None, black: str | None = None,
+                      source: str | None = None) -> int | None:
+        """
+        Retorna o id de uma posição já armazenada com estes atributos, ou None.
+        Usada para deduplicar re-análises do mesmo jogador (mesma posição da
+        mesma partida não deve virar uma nova linha a cada execução).
+        """
+        conditions, params = ["fen = ?"], [fen]
+        for col, val in (("move_played", move_played), ("white", white),
+                         ("black", black), ("source", source)):
+            if val is not None:
+                conditions.append(f"{col} = ?")
+                params.append(val)
+        row = self._conn.execute(
+            f"SELECT id FROM positions WHERE {' AND '.join(conditions)} LIMIT 1",
+            params,
+        ).fetchone()
+        return row["id"] if row else None
+
     def insert_positions_bulk(self, positions: list[dict], source: str = "chess_com") -> list[int]:
         """Inserts multiple positions and returns their ids."""
         ids = []

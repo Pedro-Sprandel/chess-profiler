@@ -1,7 +1,9 @@
 import json
+from datetime import datetime, timezone
+
 import chess
 from config import MIN_OCCURRENCES, MAX_STAT_CP
-from modules.concept_relevance import is_instructive, is_missed_tactic
+from modules.concept_relevance import is_instructive, is_missed_tactic, is_converted_tactic
 
 
 def _player_eval(validation: dict, key: str, player_color_bool: bool) -> float:
@@ -31,15 +33,19 @@ def _is_allowed_checkmate(validation: dict, player_color_bool: bool) -> bool:
     return before <= -9000 or after <= -9000
 
 
-def _record_error(concept_stats: dict, concept_key: str, validation: dict,
-                  game: dict, fen, move_played, best_move):
-    """Credita uma ocorrência de erro a um conceito e guarda a posição de exemplo."""
-    stats = concept_stats.setdefault(concept_key, {
+def _empty_stats() -> dict:
+    return {
         "total_occurrences": 0,
         "error_occurrences": 0,
         "total_error_magnitude": 0,
         "positions": [],
-    })
+    }
+
+
+def _record_error(concept_stats: dict, concept_key: str, validation: dict,
+                  game: dict, position: dict):
+    """Credita uma ocorrência de erro a um conceito e guarda a posição de exemplo."""
+    stats = concept_stats.setdefault(concept_key, _empty_stats())
     stats["error_occurrences"] += 1
     # Cap at MAX_STAT_CP so mate scores (≈10000 cp) don't skew the average
     stats["total_error_magnitude"] += min(validation["error_magnitude"], MAX_STAT_CP)
@@ -48,9 +54,14 @@ def _record_error(concept_stats: dict, concept_key: str, validation: dict,
         "white": game.get("white", "White"),
         "black": game.get("black", "Black"),
         "player_color": game.get("player_color", "white"),
-        "fen": fen,
-        "move_played": move_played,
-        "best_move": best_move,
+        "game_url": game.get("game_url", ""),
+        "date": game.get("date", ""),
+        "fen": position.get("fen"),
+        "move_number": position.get("move_number"),
+        "move_played": position.get("move_played"),
+        "best_move": validation.get("best_move"),
+        "eval_before": validation.get("eval_before"),
+        "eval_after": validation.get("eval_after"),
         "error_magnitude": validation["error_magnitude"],
     })
 
@@ -101,7 +112,7 @@ def build_profile(games_data: list) -> dict:
                 # strategic concepts (weak_square, king_safety, ...).
                 if board and is_missed_tactic(board, move_played, best_move, player_color_bool):
                     _record_error(concept_stats, "missed_tactic", validation,
-                                  game, fen, move_played, best_move)
+                                  game, position)
                     continue
 
                 for concept_key, concept_data in concepts.items():
@@ -117,18 +128,28 @@ def build_profile(games_data: list) -> dict:
                     # Store every instructive error position; the Game Explorer shows
                     # one per game by default and "loads more" up to all of them.
                     _record_error(concept_stats, concept_key, validation,
-                                  game, fen, move_played, best_move)
+                                  game, position)
             else:
+                # Oportunidade tática convertida: o melhor lance era uma captura que
+                # ganhava material e o jogador a jogou. Alimenta o denominador do
+                # missed_tactic para a taxa de erro dele significar algo (perdidas /
+                # oportunidades), em vez de ficar ~100% por construção.
+                fen = position.get("fen")
+                board = chess.Board(fen) if fen else None
+                if board and is_converted_tactic(board, position.get("move_played"),
+                                                 validation.get("best_move"),
+                                                 player_color_bool):
+                    stats = concept_stats.setdefault("missed_tactic", _empty_stats())
+                    stats["total_occurrences"] += 1
+
+                # Nota metodológica: o denominador (total_occurrences) conta toda
+                # posição correta com o conceito presente, sem o gate causal de
+                # is_instructive — que só é definível quando houve erro. A taxa de
+                # erro é portanto conservadora (denominador amplo, numerador gated).
                 for concept_key, concept_data in concepts.items():
                     if concept_data.get("detected", False):
-                        if concept_key not in concept_stats:
-                            concept_stats[concept_key] = {
-                                "total_occurrences": 0,
-                                "error_occurrences": 0,
-                                "total_error_magnitude": 0,
-                                "positions": []
-                            }
-                        concept_stats[concept_key]["total_occurrences"] += 1
+                        stats = concept_stats.setdefault(concept_key, _empty_stats())
+                        stats["total_occurrences"] += 1
 
     weaknesses = []
     for concept_key, stats in concept_stats.items():
@@ -151,6 +172,7 @@ def build_profile(games_data: list) -> dict:
     weaknesses.sort(key=lambda x: x["error_occurrences"], reverse=True)
 
     return {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "total_games": len(games_data),
         "total_positions_analyzed": total_positions,
         "total_errors_detected": total_errors,

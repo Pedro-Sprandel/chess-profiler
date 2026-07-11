@@ -9,7 +9,7 @@ from modules.stockfish_validator import batch_validate, open_engine
 from modules.profile_builder import build_profile, save_profile, load_profile
 from modules.ai_diagnostician import diagnose, load_silman_concepts
 from modules.db import Database
-from config import OUTPUT_DIR, STOCKFISH_DEPTH
+from config import OUTPUT_DIR, STOCKFISH_DEPTH, OPENING_MOVES_TO_SKIP
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -28,8 +28,18 @@ def _persist_games_to_db(db: Database, games_data: list, source: str):
     """Persists all positions and their analysis results to the SQLite database."""
     for game in games_data:
         for pos in game["positions"]:
+            # Dedupe: re-análises do mesmo jogador re-visitam as mesmas posições —
+            # não duplicar a linha nem os resultados de análise associados.
+            existing = db.find_position(
+                fen=pos["fen"], move_played=pos["move_played"],
+                white=game["white"], black=game["black"], source=source,
+            )
+            if existing is not None:
+                continue
+
             pos_id = db.insert_position({
                 "fen":          pos["fen"],
+                "move_number":  pos.get("move_number"),
                 "move_played":  pos["move_played"],
                 "player_color": game["player_color"],
                 "white":        game["white"],
@@ -57,10 +67,31 @@ def _persist_games_to_db(db: Database, games_data: list, source: str):
             db.insert_analysis_results_bulk(bulk_rows)
 
 
+def _int_header(headers, key) -> int:
+    try:
+        return int(headers.get(key, 0) or 0)
+    except ValueError:
+        return 0
+
+
+def _opening_name(headers) -> str:
+    """Nome da abertura: header Opening, ou derivado do ECOUrl do Chess.com."""
+    opening = headers.get("Opening", "")
+    if opening and opening != "?":
+        return opening
+    eco_url = headers.get("ECOUrl", "")
+    if eco_url:
+        return eco_url.rstrip("/").split("/")[-1].replace("-", " ")
+    return ""
+
+
 def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKFISH_DEPTH) -> list:
     """
     Analisa cada partida: detecta conceitos por posição e valida no Stockfish
     apenas as posições com pelo menos um conceito detectado.
+
+    Os primeiros OPENING_MOVES_TO_SKIP lances completos são ignorados: são
+    majoritariamente teoria de abertura, onde conceito detectado é ruído.
 
     game_color_pairs: lista de (chess.pgn.Game, player_color bool)
     depth: profundidade UCI usada na validação Stockfish.
@@ -77,12 +108,15 @@ def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKF
             positions_with_concepts = []  # (original_index, board_before, move_played)
 
             for board_before, move_played, board_after in iterate_positions(game, player_color):
+                if board_before.fullmove_number <= OPENING_MOVES_TO_SKIP:
+                    continue
                 concepts = detect_concepts(board_before, player_color)
                 pos_idx = len(game_positions)
                 if any(v.get("detected") for v in concepts.values()):
                     positions_with_concepts.append((pos_idx, board_before.copy(), move_played))
                 game_positions.append({
                     "fen": board_before.fen(),
+                    "move_number": board_before.fullmove_number,
                     "move_played": move_played.uci(),
                     "concepts_detected": concepts,
                     "stockfish_validation": _NO_ERROR,
@@ -94,10 +128,17 @@ def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKF
                 for idx, validation in zip(idxs, validations):
                     game_positions[idx]["stockfish_validation"] = validation
 
+            headers = game.headers
             games_data.append({
                 "game_id": f"game_{i + 1}",
-                "white": game.headers.get("White", "White"),
-                "black": game.headers.get("Black", "Black"),
+                "white": headers.get("White", "White"),
+                "black": headers.get("Black", "Black"),
+                "white_rating": _int_header(headers, "WhiteElo"),
+                "black_rating": _int_header(headers, "BlackElo"),
+                "date": headers.get("UTCDate", headers.get("Date", "")),
+                "game_url": headers.get("Link", ""),
+                "eco": headers.get("ECO", ""),
+                "opening": _opening_name(headers),
                 "player_color": "white" if player_color else "black",
                 "positions": game_positions,
             })
@@ -107,7 +148,8 @@ def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKF
     return games_data
 
 
-def _build_profile_phase(games_data: list, name: str, source: str, on_progress=None) -> dict:
+def _build_profile_phase(games_data: list, name: str, source: str, on_progress=None,
+                         depth: int = STOCKFISH_DEPTH) -> dict:
     """
     Persiste no SQLite, constrói o perfil de fraquezas e salva
     output/{name}_profile.json. Não roda o diagnóstico da IA.
@@ -124,6 +166,11 @@ def _build_profile_phase(games_data: list, name: str, source: str, on_progress=N
     # Constrói perfil de fraquezas
     _emit(on_progress, "profile", 0, 1, "[main] Building weakness profile...")
     profile = build_profile(games_data)
+    profile["metadata"] = {
+        "player": name,
+        "source": source,
+        "depth": depth,
+    }
     save_profile(profile, f"{OUTPUT_DIR}/{name}_profile.json")
 
     print(f"\n[main] Resumo do perfil:")
@@ -184,7 +231,7 @@ def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.
 
     game_color_pairs = [(game, player_color) for game in games]
     games_data = _process_games(game_color_pairs, on_progress, depth=depth)
-    return _build_profile_phase(games_data, player_name, "pgn", on_progress)
+    return _build_profile_phase(games_data, player_name, "pgn", on_progress, depth=depth)
 
 
 def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=None,
@@ -205,7 +252,8 @@ def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=
     _emit(on_progress, "fetch", 1, 1, f"{len(game_color_pairs)} games loaded from Chess.com")
 
     games_data = _process_games(game_color_pairs, on_progress, depth=depth)
-    return _build_profile_phase(games_data, profile_name or username, "chess_com", on_progress)
+    return _build_profile_phase(games_data, profile_name or username, "chess_com",
+                                on_progress, depth=depth)
 
 
 def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.WHITE,

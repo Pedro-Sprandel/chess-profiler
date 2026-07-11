@@ -8,12 +8,13 @@
       "silman_category": "desequilíbrios estáticos",
       "description": "Casa que não pode ser defendida por peões e pode ser ocupada por peças adversárias.",
       "characteristics": [
-        "Nenhum peão aliado nas colunas adjacentes pode atacar essa casa",
-        "Localizada no campo próprio (ranks 4-8 para brancas, 1-5 para pretas)",
-        "Casa está sob ataque ou influência de peças adversárias"
+        "Nenhum peão aliado atrás da casa nas colunas adjacentes pode vir a defendê-la",
+        "Localizada na zona de buracos do campo próprio (fileiras 3-4 para brancas, 6-5 para pretas)",
+        "Uma peça adversária ocupa a casa ou pode ocupá-la"
       ],
       "strategic_implications": "Permite infiltração de cavalos e bispos adversários em posições fixas. Deve ser bloqueada com peças ou eliminada estruturalmente.",
-      "detection_key": "weak_square"
+      "detection_key": "weak_square",
+      "name_en": "Weak Square"
     },
     {
       "id": "open_file",
@@ -28,7 +29,8 @@
         "Coluna conecta os dois campos e permite penetração na 7ª ou 8ª fileira"
       ],
       "strategic_implications": "Quem controla colunas abertas controla penetração e pode dobrar torres. Ignorar colunas abertas desperdiça a principal força das torres.",
-      "detection_key": "open_file"
+      "detection_key": "open_file",
+      "name_en": "Open File"
     },
     {
       "id": "isolated_pawn",
@@ -43,7 +45,8 @@
         "A casa à sua frente torna-se alvo de bloqueio pelo adversário"
       ],
       "strategic_implications": "Fraqueza permanente que requer defesa passiva de peças. O adversário deve pressionar o peão isolado imobilizando peças defensoras e depois atacar outro ponto.",
-      "detection_key": "isolated_pawn"
+      "detection_key": "isolated_pawn",
+      "name_en": "Isolated Pawn"
     },
     {
       "id": "bishop_pair",
@@ -58,7 +61,8 @@
         "Bispos cobrem casas de ambas as cores simultaneamente"
       ],
       "strategic_implications": "Vantagem crescente à medida que o jogo se abre. Deve-se evitar trocas desnecessárias de bispos e abrir o jogo para ativá-los.",
-      "detection_key": "bishop_pair"
+      "detection_key": "bishop_pair",
+      "name_en": "Bishop Pair"
     },
     {
       "id": "knight_outpost",
@@ -68,12 +72,13 @@
       "silman_category": "desequilíbrios estáticos",
       "description": "Cavalo em casa fraca no campo adversário que não pode ser expulso por peões.",
       "characteristics": [
-        "Cavalo localizado no campo adversário (ranks 5-8 para brancas)",
-        "Nenhum peão adversário pode atacar a casa do cavalo",
-        "Cavalo preferencialmente protegido por um peão aliado"
+        "Cavalo localizado no campo adversário (fileiras 5-8 para brancas)",
+        "Nenhum peão adversário pode atacar a casa do cavalo, nem agora nem avançando",
+        "Cavalo protegido por um peão aliado"
       ],
       "strategic_implications": "Cavalo fixo no centro ou campo adversário é vantagem posicional duradoura. Quanto mais fechada a posição, mais valioso o cavalo em posto avançado.",
-      "detection_key": "knight_outpost"
+      "detection_key": "knight_outpost",
+      "name_en": "Knight Outpost"
     },
     {
       "id": "king_safety",
@@ -88,7 +93,8 @@
         "Adversário tem peças ativas apontando para o rei"
       ],
       "strategic_implications": "Rei exposto transforma o jogo em dinâmico: o adversário deve atacar imediatamente. Este desequilíbrio supera fatores posicionais estáticos quando a posição é aguda.",
-      "detection_key": "king_safety"
+      "detection_key": "king_safety",
+      "name_en": "King Safety"
     },
     {
       "id": "space_advantage",
@@ -103,7 +109,8 @@
         "Adversário tem pouco espaço para reorganizar suas peças"
       ],
       "strategic_implications": "Mais espaço significa mais opções e restrição das peças adversárias. Deve ser explorado com avanços de peões ou criação de fraquezas no campo do adversário.",
-      "detection_key": "space_advantage"
+      "detection_key": "space_advantage",
+      "name_en": "Space Advantage"
     },
     {
       "id": "passed_pawn",
@@ -118,7 +125,8 @@
         "Quanto mais avançado, maior o valor do peão passado"
       ],
       "strategic_implications": "Peão passado é uma vantagem crescente no final de jogo. Deve ser apoiado por peças e avançado. O adversário deve bloqueá-lo com uma peça, imobilizando-a.",
-      "detection_key": "passed_pawn"
+      "detection_key": "passed_pawn",
+      "name_en": "Passed Pawn"
     },
     {
       "id": "doubled_pawn",
@@ -133,7 +141,8 @@
         "A coluna com peões dobrados frequentemente torna-se semi-aberta para o adversário"
       ],
       "strategic_implications": "Peões dobrados são estruturalmente fracos e limitam a mobilidade de peões. O adversário deve pressionar essa coluna com torres. Em alguns casos podem ser compensados por melhora nas peças.",
-      "detection_key": "doubled_pawn"
+      "detection_key": "doubled_pawn",
+      "name_en": "Doubled Pawns"
     },
     {
       "id": "rook_on_7th",
@@ -148,7 +157,8 @@
         "Rei adversário forçado a ficar na 8ª fileira"
       ],
       "strategic_implications": "Torre na 7ª fileira é extremamente poderosa: ataca peões, restringe o rei e ganha tempo. Dobrar torres na 7ª fileira pode ser decisivo.",
-      "detection_key": "rook_on_7th"
+      "detection_key": "rook_on_7th",
+      "name_en": "Rook on the 7th"
     },
     {
       "id": "bad_bishop",
@@ -163,7 +173,8 @@
         "O bispo adversário (ou cavalo) é mais ativo comparativamente"
       ],
       "strategic_implications": "Bispo ruim é uma peça passiva que não contribui para o jogo. A estratégia correta é colocar peões na cor oposta ao bispo ou trocá-lo por uma peça adversária ativa.",
-      "detection_key": "bad_bishop"
+      "detection_key": "bad_bishop",
+      "name_en": "Bad Bishop"
     },
     {
       "id": "pawn_majority",
@@ -178,7 +189,8 @@
         "Oponente não tem maioria equivalente no mesmo flanco"
       ],
       "strategic_implications": "Maioria saudável de peões deve ser avançada para criar um peão passado. Ignorar a maioria desperdiça uma vantagem estrutural de longo prazo.",
-      "detection_key": "pawn_majority"
+      "detection_key": "pawn_majority",
+      "name_en": "Pawn Majority"
     },
     {
       "id": "piece_activity",
@@ -193,7 +205,8 @@
         "Vantagem de mobilidade superior a 3 casas por peça em média"
       ],
       "strategic_implications": "Peças ativas são mais valiosas que material passivo. Deve-se sempre procurar melhorar a peça menos ativa antes de qualquer outra ação.",
-      "detection_key": "piece_activity"
+      "detection_key": "piece_activity",
+      "name_en": "Piece Activity"
     },
     {
       "id": "overloaded_piece",
@@ -208,7 +221,8 @@
         "Adversário pode explorar com ameaças duplas ou sacrifícios"
       ],
       "strategic_implications": "Peça sobrecarregada é alvo de combinações táticas. O jogador deve redistribuir a defesa antes que o adversário explore a sobrecarga com ameaças duplas.",
-      "detection_key": "overloaded_piece"
+      "detection_key": "overloaded_piece",
+      "name_en": "Overloaded Piece"
     },
     {
       "id": "backward_pawn",
@@ -223,7 +237,8 @@
         "O peão está preso, tornando-se alvo de pressão de torres na coluna semi-aberta"
       ],
       "strategic_implications": "Peão atrasado é fraqueza estrutural permanente: preso na coluna semi-aberta, torna-se alvo de pressão de torres. O adversário deve dobrar torres nessa coluna; o jogador deve buscar avançar o peão quando possível ou trocá-lo para eliminar a fraqueza.",
-      "detection_key": "backward_pawn"
+      "detection_key": "backward_pawn",
+      "name_en": "Backward Pawn"
     },
     {
       "id": "center_control",
@@ -238,7 +253,8 @@
         "Adversário tem pouca ou nenhuma presença nas casas centrais"
       ],
       "strategic_implications": "Controle central é a base do pensamento estratégico de Silman: peças no centro têm mais mobilidade e opções de ataque em qualquer flanco. Uma vantagem central deve ser convertida em iniciativa concreta antes que o adversário consiga equalizar com avanços de peões.",
-      "detection_key": "center_control"
+      "detection_key": "center_control",
+      "name_en": "Center Control"
     },
     {
       "id": "hanging_piece",
@@ -253,7 +269,8 @@
         "A captura resulta em ganho material imediato e sem compensação para o adversário"
       ],
       "strategic_implications": "Peça pendurada é o erro mais custoso no xadrez amador: perde material sem contrapartida. O jogador deve verificar a segurança de todas as suas peças após cada lance do adversário, antes de escolher seu próprio lance.",
-      "detection_key": "hanging_piece"
+      "detection_key": "hanging_piece",
+      "name_en": "Hanging Piece"
     },
     {
       "id": "missed_tactic",
@@ -268,7 +285,8 @@
         "O jogador optou por outro lance, abrindo mão do ganho material"
       ],
       "strategic_implications": "Indica falha de visão tática/atenção, não de compreensão estratégica. Treina-se com exercícios de tática e checagem sistemática de capturas e ameaças antes de cada lance.",
-      "detection_key": "missed_tactic"
+      "detection_key": "missed_tactic",
+      "name_en": "Missed Tactic"
     }
   ]
 }

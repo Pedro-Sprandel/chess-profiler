@@ -1,5 +1,55 @@
 import chess
 
+_PIECE_VALUE = {
+    chess.PAWN:   100,
+    chess.KNIGHT: 300,
+    chess.BISHOP: 300,
+    chess.ROOK:   500,
+    chess.QUEEN:  900,
+    # Rei "vale" mais que tudo: numa troca simulada, capturar com o rei numa casa
+    # ainda defendida gera recaptura de valor altíssimo, o que descarta a sequência
+    # — aproximação do fato de que essa captura seria ilegal.
+    chess.KING:   10000,
+}
+
+
+def _least_valuable_attacker(board: chess.Board, square: int, color: bool):
+    """Retorna (casa, valor) do atacante mais barato de `color` sobre `square`, ou None."""
+    best = None
+    for a in board.attackers(color, square):
+        piece = board.piece_at(a)
+        if piece is None:
+            continue
+        value = _PIECE_VALUE.get(piece.piece_type, 0)
+        if best is None or value < best[1]:
+            best = (a, value)
+    return best
+
+
+def static_exchange_gain(board: chess.Board, square: int, color: bool) -> int:
+    """
+    SEE (static exchange evaluation) simplificado: ganho material líquido (em
+    centipawns, peão=100) que `color` obtém iniciando a sequência de capturas na
+    casa `square`, com ambos os lados capturando sempre com a peça mais barata e
+    podendo parar quando continuar perde material.
+
+    > 0 significa que capturar na casa ganha material. Ignora cravadas e raios X.
+    """
+    target = board.piece_at(square)
+    if target is None:
+        return 0
+    attacker = _least_valuable_attacker(board, square, color)
+    if attacker is None:
+        return 0
+
+    attacker_sq, _ = attacker
+    b = board.copy(stack=False)
+    piece = b.piece_at(attacker_sq)
+    b.remove_piece_at(attacker_sq)
+    b.set_piece_at(square, piece)
+    gain = _PIECE_VALUE.get(target.piece_type, 0) - static_exchange_gain(b, square, not color)
+    return max(0, gain)
+
 
 def detect_concepts(board: chess.Board, player_color: bool) -> dict:
     """
@@ -34,37 +84,61 @@ def detect_concepts(board: chess.Board, player_color: bool) -> dict:
 
 def detect_weak_squares(board: chess.Board, player_color: bool) -> dict:
     """
-    Detecta casas fracas no campo do jogador (casas que seus peões não defendem).
-    Uma casa fraca é aquela que nenhum peão aliado pode atacar agora ou futuramente.
+    Detecta casas fracas (buracos) no campo do jogador: casas nas fileiras 3-4
+    (6-5 para as pretas) que nenhum peão aliado pode vir a defender e que uma
+    peça adversária pode ocupar (Silman: "hole in your camp").
+
+    Três condições:
+      1. Casa na zona de buracos do próprio campo (fileiras 3-4 / 6-5)
+      2. Nenhum peão aliado ATRÁS da casa nas colunas adjacentes — só peões que
+         ainda não passaram da casa podem um dia defendê-la
+      3. Uma peça adversária já ocupa a casa, ou pode ocupá-la (cavalo, bispo,
+         torre ou dama atacando a casa vazia)
     """
     weak_squares = []
     opponent_color = not player_color
+    _OCCUPIERS = (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN)
+    relevant_ranks = (2, 3) if player_color == chess.WHITE else (5, 4)
 
     for square in chess.SQUARES:
-        file = chess.square_file(square)
         rank = chess.square_rank(square)
-
-        # Foca no campo do jogador (metade do tabuleiro)
-        if player_color == chess.WHITE and rank < 4:
+        if rank not in relevant_ranks:
             continue
-        if player_color == chess.BLACK and rank > 3:
-            continue
+        file = chess.square_file(square)
 
-        # Verifica se nenhum peão aliado pode defender essa casa
+        occupant = board.piece_at(square)
+        if occupant and occupant.color == player_color:
+            continue  # casa ocupada por peça própria — não há o que infiltrar
+
+        # Só peões atrás da casa (que ainda podem avançar até defendê-la) contam
         can_be_defended = False
+        behind_ranks = range(0, rank) if player_color == chess.WHITE else range(rank + 1, 8)
         for adj_file in [file - 1, file + 1]:
-            if 0 <= adj_file <= 7:
-                for r in range(8):
-                    sq = chess.square(adj_file, r)
-                    piece = board.piece_at(sq)
-                    if piece and piece.piece_type == chess.PAWN and piece.color == player_color:
-                        can_be_defended = True
-                        break
+            if not 0 <= adj_file <= 7:
+                continue
+            for r in behind_ranks:
+                piece = board.piece_at(chess.square(adj_file, r))
+                if piece and piece.piece_type == chess.PAWN and piece.color == player_color:
+                    can_be_defended = True
+                    break
+            if can_be_defended:
+                break
+        if can_be_defended:
+            continue
 
-        if not can_be_defended:
-            # Verifica se o adversário tem peça que poderia ocupar essa casa
-            if board.is_attacked_by(opponent_color, square):
+        if occupant is not None:
+            # Peça adversária já instalada no buraco — fraqueza consumada
+            if occupant.piece_type in _OCCUPIERS:
                 weak_squares.append(chess.square_name(square))
+            continue
+
+        # Casa vazia: o adversário precisa de uma peça capaz de ocupá-la
+        occupiable = any(
+            (p := board.piece_at(a)) and p.piece_type in _OCCUPIERS
+            for a in board.attackers(opponent_color, square)
+        )
+        if occupiable:
+            weak_squares.append(chess.square_name(square))
 
     return {
         "detected": len(weak_squares) > 0,
@@ -183,7 +257,11 @@ def detect_bishop_pair(board: chess.Board, player_color: bool) -> dict:
 
 def detect_knight_outpost(board: chess.Board, player_color: bool) -> dict:
     """
-    Detecta cavalos do jogador em postos avançados (casas fracas no campo adversário).
+    Detecta cavalos do jogador em postos avançados (definição de Silman):
+      1. Cavalo no campo adversário
+      2. Nenhum peão adversário nas colunas adjacentes pode atacar a casa —
+         nem agora, nem avançando (o cavalo não pode ser expulso por peões)
+      3. Cavalo apoiado por um peão aliado
     """
     opponent_color = not player_color
     outposts = []
@@ -194,6 +272,7 @@ def detect_knight_outpost(board: chess.Board, player_color: bool) -> dict:
             continue
 
         rank = chess.square_rank(square)
+        file = chess.square_file(square)
 
         # Cavalo deve estar no campo adversário
         if player_color == chess.WHITE and rank < 4:
@@ -201,22 +280,38 @@ def detect_knight_outpost(board: chess.Board, player_color: bool) -> dict:
         if player_color == chess.BLACK and rank > 3:
             continue
 
-        # Casa não pode ser atacada por peões adversários
-        attacked_by_opponent_pawn = False
-        file = chess.square_file(square)
+        # Nenhum peão adversário nas colunas adjacentes pode jamais atacar a casa.
+        # Para as brancas: um peão preto em (coluna adjacente, fileira > rank) ainda
+        # pode avançar até rank+1 e atacar o cavalo.
+        can_be_kicked = False
+        threat_ranks = range(rank + 1, 8) if player_color == chess.WHITE else range(rank - 1, -1, -1)
+        for pf in [file - 1, file + 1]:
+            if not 0 <= pf <= 7:
+                continue
+            for pr in threat_ranks:
+                p = board.piece_at(chess.square(pf, pr))
+                if p and p.piece_type == chess.PAWN and p.color == opponent_color:
+                    can_be_kicked = True
+                    break
+            if can_be_kicked:
+                break
+        if can_be_kicked:
+            continue
 
-        pawn_attack_ranks = [rank + 1] if player_color == chess.WHITE else [rank - 1]
-        for pr in pawn_attack_ranks:
-            if 0 <= pr <= 7:
-                for pf in [file - 1, file + 1]:
-                    if 0 <= pf <= 7:
-                        sq = chess.square(pf, pr)
-                        p = board.piece_at(sq)
-                        if p and p.piece_type == chess.PAWN and p.color == opponent_color:
-                            attacked_by_opponent_pawn = True
+        # Apoio de peão aliado: peão em coluna adjacente uma fileira atrás
+        support_rank = rank - 1 if player_color == chess.WHITE else rank + 1
+        supported = False
+        if 0 <= support_rank <= 7:
+            for pf in [file - 1, file + 1]:
+                if 0 <= pf <= 7:
+                    p = board.piece_at(chess.square(pf, support_rank))
+                    if p and p.piece_type == chess.PAWN and p.color == player_color:
+                        supported = True
+                        break
+        if not supported:
+            continue
 
-        if not attacked_by_opponent_pawn:
-            outposts.append(chess.square_name(square))
+        outposts.append(chess.square_name(square))
 
     return {
         "detected": len(outposts) > 0,
@@ -234,7 +329,8 @@ def detect_king_safety(board: chess.Board, player_color: bool) -> dict:
     """
     king_square = board.king(player_color)
     if king_square is None:
-        return {"detected": False, "exposed": False, "shield_pawns": 0}
+        return {"detected": False, "exposed": False, "shield_pawns": 0,
+                "open_files_near_king": [], "king_in_center": False}
 
     opponent_color = not player_color
     _ATTACKERS = (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
@@ -251,6 +347,8 @@ def detect_king_safety(board: chess.Board, player_color: bool) -> dict:
             "detected": False,
             "exposed": False,
             "shield_pawns": 0,
+            "open_files_near_king": [],
+            "king_in_center": False,
             "king_square": chess.square_name(king_square),
             "has_castled_position": False,
         }
@@ -269,14 +367,37 @@ def detect_king_safety(board: chess.Board, player_color: bool) -> dict:
                 if p and p.piece_type == chess.PAWN and p.color == player_color:
                     shield_pawns += 1
 
-    has_castled = (player_color == chess.WHITE and king_file in [6, 2]) or \
-                  (player_color == chess.BLACK and king_file in [6, 2])
-    exposed = shield_pawns < 2
+    # Colunas sem peão aliado na região do rei (aberta ou semi-aberta contra ele):
+    # avenidas diretas para torres e dama adversárias.
+    open_files_near_king = []
+    for pf in range(max(0, king_file - 1), min(8, king_file + 2)):
+        has_own_pawn = any(
+            (p := board.piece_at(chess.square(pf, r))) and
+            p.piece_type == chess.PAWN and p.color == player_color
+            for r in range(8)
+        )
+        if not has_own_pawn:
+            open_files_near_king.append(chess.FILE_NAMES[pf])
+
+    # Rei preso no centro: nas colunas c-f, sem direito de roque restante,
+    # com a dama adversária ainda no tabuleiro.
+    opponent_has_queen = any(pt == chess.QUEEN for pt in opponent_pieces)
+    king_in_center = (
+        king_file in (2, 3, 4, 5)
+        and not board.has_castling_rights(player_color)
+        and opponent_has_queen
+    )
+
+    back_rank = 0 if player_color == chess.WHITE else 7
+    has_castled = king_rank == back_rank and king_file in [6, 2]
+    exposed = shield_pawns < 2 or bool(open_files_near_king) or king_in_center
 
     return {
         "detected": exposed,
         "exposed": exposed,
         "shield_pawns": shield_pawns,
+        "open_files_near_king": open_files_near_king,
+        "king_in_center": king_in_center,
         "king_square": chess.square_name(king_square),
         "has_castled_position": has_castled
     }
@@ -495,38 +616,23 @@ def detect_piece_activity(board: chess.Board, player_color: bool) -> dict:
     }
 
 
-_PIECE_VALUE = {
-    chess.PAWN:   100,
-    chess.KNIGHT: 300,
-    chess.BISHOP: 300,
-    chess.ROOK:   500,
-    chess.QUEEN:  900,
-}
-
-
 def _is_real_threat(board: chess.Board, sq: int, player_color: bool) -> bool:
     """
     True when the attack on sq constitutes a genuine material threat.
 
     A threat is real only if the cheapest attacker's value ≤ the target's value
-    (capture is at worst an even exchange), OR the piece is completely undefended
-    (any attacker can take it profitably regardless of its own value).
+    (capture is at worst an even exchange), OR the piece is completely undefended.
+    Diferente do SEE, trocas IGUAIS contam: para fins de sobrecarga, uma peça em
+    troca igual ainda depende do defensor — se ele sair, ela simplesmente cai.
     """
-    attackers = list(board.attackers(player_color, sq))
-    if not attackers:
+    attacker = _least_valuable_attacker(board, sq, player_color)
+    if attacker is None:
         return False
 
     target = board.piece_at(sq)
     target_value = _PIECE_VALUE.get(target.piece_type, 0)
-
-    min_attacker_value = min(
-        _PIECE_VALUE.get(board.piece_at(a).piece_type, 0)
-        for a in attackers
-        if board.piece_at(a)
-    )
-
     is_defended = bool(board.attackers(not player_color, sq))
-    return min_attacker_value <= target_value or not is_defended
+    return attacker[1] <= target_value or not is_defended
 
 
 def detect_overloaded_piece(board: chess.Board, player_color: bool) -> dict:
@@ -576,15 +682,16 @@ def detect_overloaded_piece(board: chess.Board, player_color: bool) -> dict:
 
 def detect_hanging_piece(board: chess.Board, player_color: bool) -> dict:
     """
-    Detecta peças do jogador que estão penduradas: atacadas pelo adversário
-    e sem nenhuma defesa de peças aliadas.
+    Detecta peças do jogador que estão penduradas: o adversário ganha material
+    capturando-as segundo a avaliação estática de trocas (SEE). Cobre tanto a
+    peça atacada e indefesa quanto a peça defendida mas atacada por peça mais
+    barata (ex.: cavalo defendido atacado por peão).
 
     board: posição ANTES do lance do jogador. Captura casos onde o jogador
     deixou uma peça pendurada no lance anterior e não a salva aqui.
 
     Exclui o rei (coberto por detect_king_safety).
     """
-    opponent_color = not player_color
     hanging = []
 
     for sq in chess.SQUARES:
@@ -592,7 +699,7 @@ def detect_hanging_piece(board: chess.Board, player_color: bool) -> dict:
         if not piece or piece.color != player_color or piece.piece_type == chess.KING:
             continue
 
-        if board.is_attacked_by(opponent_color, sq) and not board.is_attacked_by(player_color, sq):
+        if static_exchange_gain(board, sq, not player_color) > 0:
             hanging.append(chess.square_name(sq))
 
     return {

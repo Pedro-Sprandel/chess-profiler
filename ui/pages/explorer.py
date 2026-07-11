@@ -6,7 +6,27 @@ import streamlit as st
 import streamlit.components.v1 as components
 from modules.ai_diagnostician import explain_position
 from ui.i18n import t
+from ui.concepts import concept_label
 from config import OUTPUT_DIR
+
+
+def _san(fen: str, uci: str | None) -> str | None:
+    """Converte um lance UCI para SAN no contexto da posição (g1f3 → Nf3)."""
+    if not uci:
+        return None
+    try:
+        return chess.Board(fen).san(chess.Move.from_uci(uci))
+    except Exception:
+        return uci
+
+
+def _fmt_eval(cp) -> str:
+    """Formata centipawns (POV brancas) como avaliação legível (+1.2 / -0.5 / #)."""
+    if cp is None:
+        return "?"
+    if abs(cp) >= 9000:
+        return "#" if cp > 0 else "-#"
+    return f"{cp / 100:+.1f}"
 
 
 def render():
@@ -33,9 +53,7 @@ def render():
         return
 
     # ── Concept selector ──────────────────────────────────────────────────────
-    concept_options = {
-        w["concept"].replace("_", " ").title(): w for w in weaknesses
-    }
+    concept_options = {concept_label(w["concept"]): w for w in weaknesses}
     selected_concept = st.selectbox(t("explorer.select_concept"), list(concept_options.keys()), key="explorer_concept_select")
     weakness = concept_options[selected_concept]
 
@@ -79,7 +97,11 @@ def render():
     st.subheader(t("explorer.sample_positions", n=show_n))
 
     for i, pos in enumerate(ordered[:show_n]):
-        label = t("explorer.expander", i=i + 1, game=pos.get("game_id", "?"), cp=pos.get("error_magnitude", "?"))
+        player_color = pos.get("player_color", "white")
+        white_name = pos.get("white", "White")
+        black_name = pos.get("black", "Black")
+        opponent = black_name if player_color == "white" else white_name
+        label = t("explorer.expander", i=i + 1, opp=opponent, cp=pos.get("error_magnitude", "?"))
         with st.expander(label, expanded=(i == 0)):
             fen = pos.get("fen")
             if not fen:
@@ -89,10 +111,7 @@ def render():
             board = chess.Board(fen)
             move_played = pos.get("move_played")
             best_move = pos.get("best_move")
-            player_color = pos.get("player_color", "white")
             orientation = chess.WHITE if player_color == "white" else chess.BLACK
-            white_name = pos.get("white", "White")
-            black_name = pos.get("black", "Black")
 
             arrows = []
             if move_played:
@@ -122,19 +141,30 @@ def render():
                     height=430,
                 )
             with col_info:
-                st.markdown(t("explorer.game", v=pos.get("game_id", "?")))
+                game_line = pos.get("game_id", "?")
+                if pos.get("date"):
+                    game_line = f"{game_line} · {pos['date']}"
+                st.markdown(t("explorer.game", v=game_line))
+                if pos.get("move_number"):
+                    st.markdown(t("explorer.move_number", v=pos["move_number"]))
                 st.markdown(t("explorer.error_cp", v=pos.get("error_magnitude", "?")))
+                if pos.get("eval_before") is not None and pos.get("eval_after") is not None:
+                    st.markdown(t("explorer.eval_swing",
+                                  b=_fmt_eval(pos["eval_before"]),
+                                  a=_fmt_eval(pos["eval_after"])))
                 if move_played:
-                    st.markdown(t("explorer.move_played", v=move_played))
+                    st.markdown(t("explorer.move_played", v=_san(fen, move_played)))
                 if best_move:
                     key = "explorer.best_same" if best_move == move_played else "explorer.best_move"
-                    st.markdown(t(key, v=best_move))
+                    st.markdown(t(key, v=_san(fen, best_move)))
                 st.markdown(t("explorer.fen", v=fen))
+                if pos.get("game_url"):
+                    st.markdown(f"[{t('explorer.view_game')}]({pos['game_url']})")
 
             # ── Ask AI why this move is a mistake ─────────────────────────────
             lang = st.session_state.get("lang", "pt")
             # Cache the explanation per position+language so it persists across reruns.
-            cache_key = f"explain::{selected}::{selected_concept}::{i}::{lang}"
+            cache_key = f"explain::{fen}::{move_played}::{lang}"
 
             if st.button(t("explorer.ask_ai"), key=f"btn_{cache_key}"):
                 with st.spinner(t("explorer.ai_thinking")):

@@ -283,6 +283,32 @@ class TestMissedTacticPrecedence:
         # The error must NOT be counted against weak_square — that was the bug.
         assert "weak_square" not in concepts
 
+    def _converted_tactic_position(self):
+        """The player PLAYED the winning capture (no error) — a converted opportunity."""
+        return {
+            "fen": self._FEN,
+            "move_played": "g5f3",
+            "concepts_detected": {"weak_square": {"detected": False}},
+            "stockfish_validation": {
+                "is_error": False,
+                "eval_before": 100,
+                "eval_after": 95,
+                "error_magnitude": 5,
+                "best_move": "g5f3",
+            },
+        }
+
+    def test_converted_tactic_feeds_missed_tactic_denominator(self):
+        # 3 missed + 1 converted → error_rate = 3/4, not 100%
+        from modules.profile_builder import build_profile
+        game = make_game("g1", [self._missed_tactic_position()] * 3 +
+                               [self._converted_tactic_position()])
+        result = build_profile([game])
+        mt = next(w for w in result["weaknesses"] if w["concept"] == "missed_tactic")
+        assert mt["error_occurrences"] == 3
+        assert mt["total_occurrences"] == 4
+        assert mt["error_rate"] == 0.75
+
 
 class TestSaveAndLoadProfile:
     def test_save_profile_writes_valid_json(self):

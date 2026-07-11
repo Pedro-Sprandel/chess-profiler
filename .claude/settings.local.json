@@ -18,7 +18,13 @@
       "Bash(git push *)",
       "Bash(git check-ignore *)",
       "Bash(GIT_TERMINAL_PROMPT=0 timeout 20 git ls-remote origin -h)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(command -v glow pandoc grip code)",
+      "Bash(command -v pandoc libreoffice soffice wkhtmltopdf weasyprint)",
+      "Bash(python build_qualitative_docx.py)",
+      "Bash(rm -f validacao_qualitativa.pdf)",
+      "Bash(soffice --headless --convert-to pdf --outdir . /home/sprandel/v1/docs/validacao_qualitativa.docx)"
     ]
   },
   "enabledPlugins": {

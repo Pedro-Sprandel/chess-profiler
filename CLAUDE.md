@@ -13,14 +13,16 @@ pedagógicos de *The Amateur's Mind* (Jeremy Silman).
 Três camadas em sequência:
 
 ```
-Partidas (Chess.com API ou PGN)
+Partidas (Chess.com API ou PGN) — primeiros OPENING_MOVES_TO_SKIP lances ignorados
         ↓
 [1] Detecção determinística — position_analyzer.py
-    17 detectores de conceitos Silman por posição (python-chess)
+    17 detectores de conceitos Silman por posição (python-chess + SEE)
     + conceito tático derivado (missed_tactic) por gate de precedência
         ↓
 [2] Validação quantitativa — stockfish_validator.py
-    Confirma se houve erro real via Stockfish UCI (centipawns)
+    Duas passadas: triagem (STOCKFISH_DEPTH) + confirmação dos erros
+    (STOCKFISH_CONFIRM_DEPTH, MultiPV=2). Erro = queda de probabilidade de
+    vitória (ΔWinP, modelo Lichess) acima do threshold + piso em centipawns.
     Cache SQLite evita re-análise de posições já vistas
         ↓
 [3] Raciocínio causal — ai_diagnostician.py
@@ -59,9 +61,10 @@ v1/
 │   ├── db.py                       ← camada SQLite (3 tabelas, WAL mode)
 │   └── fen_fetcher.py              ← busca FENs do Chess.com com filtros (não integrado ao pipeline)
 ├── ui/
-│   ├── i18n.py                     ← 85 chaves EN/PT-BR, função t(key, **kwargs)
+│   ├── i18n.py                     ← 107 chaves EN/PT-BR, função t(key, **kwargs)
+│   ├── concepts.py                 ← nomes/categorias de conceitos localizados (lê o JSON)
 │   ├── components/
-│   │   ├── weakness_chart.py       ← gráficos Plotly de erros por conceito (usa i18n)
+│   │   ├── weakness_chart.py       ← barras, radar por categoria e comparação de perfis (Plotly)
 │   │   └── diagnosis_card.py       ← formata output do diagnóstico
 │   └── pages/
 │       ├── home.py                 ← seção inicial (render())
@@ -69,22 +72,7 @@ v1/
 │       ├── profile.py              ← dashboard de métricas + gráficos
 │       ├── explorer.py             ← tabuleiro SVG com setas de lance/melhor lance
 │       └── diagnosis.py            ← causa raiz, classificação, plano de estudo
-├── tests/
-│   ├── test_position_analyzer.py   ← 59 testes com FENs conhecidas para os 17 detectores
-│   ├── test_stockfish_validator.py ← 11 testes (mock popen_uci + cache)
-│   ├── test_profile_builder.py     ← 26 testes (inclui precedência missed_tactic)
-│   ├── test_concept_relevance.py   ← 16 testes (inclui is_missed_tactic)
-│   ├── test_ai_diagnostician.py    ← 14 testes (mock cliente Anthropic, formato bilíngue)
-│   ├── test_chess_com_loader.py    ← 11 testes
-│   ├── test_pgn_loader.py          ← 11 testes
-│   ├── test_main.py                ← 10 testes (mocks externos)
-│   ├── test_app.py                 ← 15 testes AppTest (5 classes, EN/PT, fixture com perfil)
-│   ├── test_cli.py                 ← 11 testes CLI (_main com argv)
-│   ├── test_pipeline_e2e.py        ← 13 testes integração (Stockfish real, @skip_no_sf)
-│   ├── test_diagnosis_card.py      ← 6 testes
-│   ├── test_weakness_chart.py      ← 6 testes
-│   ├── test_config.py              ← 4 testes
-│   └── test_ui_dependencies.py     ← 3 testes
+├── tests/                          ← 269 testes (ver tabela na seção Testes)
 └── output/                         ← perfis e diagnósticos gerados ({user}_profile.json, etc.)
 ```
 
@@ -96,13 +84,16 @@ v1/
 ```python
 STOCKFISH_PATH = os.path.expanduser("~/stockfish/stockfish-ubuntu-x86-64-avx2")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-STOCKFISH_DEPTH = 10        # profundidade UCI; 10 é suficiente para erros estratégicos
-ERROR_THRESHOLD_CP = 50     # diferença mínima em centipawns para classificar como erro
-MIN_OCCURRENCES = 3         # mínimo de erros para uma fraqueza entrar no perfil
-MAX_STAT_CP = 500           # cap de magnitude para estatísticas (evita distorção por posições de mate)
-MATE_SCORE = 10000          # valor de cp atribuído a mate (mate_score do python-chess)
+STOCKFISH_DEPTH = 10          # profundidade da triagem (passada 1)
+STOCKFISH_CONFIRM_DEPTH = 16  # profundidade da confirmação (passada 2, só nos erros flagados)
+ERROR_THRESHOLD_CP = 50       # piso absoluto de centipawns para classificar como erro
+WINP_ERROR_THRESHOLD = 0.10   # queda mínima de probabilidade de vitória (modelo Lichess)
+OPENING_MOVES_TO_SKIP = 6     # lances completos iniciais ignorados (teoria de abertura)
+MIN_OCCURRENCES = 3           # mínimo de erros para uma fraqueza entrar no perfil
+MAX_STAT_CP = 500             # cap de magnitude para estatísticas (evita distorção por posições de mate)
+MATE_SCORE = 10000            # valor de cp atribuído a mate (mate_score do python-chess)
 TACTICAL_THRESHOLD_CP = 9000  # acima disso a avaliação é considerada tática/decisiva
-HTTP_TIMEOUT = 15           # timeout (s) das chamadas à API do Chess.com
+HTTP_TIMEOUT = 15             # timeout (s) das chamadas à API do Chess.com
 ANTHROPIC_MODEL = "claude-opus-4-6"
 ANTHROPIC_MAX_TOKENS = 8192
 
@@ -163,7 +154,23 @@ fetch_recent_games(username: str, n_games: int = 50) -> list[tuple[chess.pgn.Gam
 detect_concepts(board: chess.Board, player_color: bool) -> dict
 # Retorna dict com 17 chaves — uma por conceito Silman.
 # Cada valor é um dict com pelo menos {"detected": bool} + campos específicos.
+
+static_exchange_gain(board, square, color) -> int
+# SEE simplificado: ganho material (cp, peão=100) iniciando capturas na casa.
+# Usado por hanging_piece, is_missed_tactic/is_converted_tactic. Ignora cravadas.
 ```
+
+Definições reforçadas dos detectores sensíveis:
+- `weak_square`: buraco no PRÓPRIO campo (fileiras 3-4 brancas / 6-5 pretas) que
+  nenhum peão aliado ATRÁS da casa pode vir a defender e que uma peça adversária
+  ocupa ou pode ocupar (N/B/R/Q atacando a casa vazia).
+- `knight_outpost`: cavalo no campo adversário que nenhum peão inimigo pode atacar
+  (nem avançando) E apoiado por peão aliado (definição completa do Silman).
+- `hanging_piece`: peça cuja captura ganha material via SEE — inclui peça defendida
+  atacada por peça mais barata (cavalo defendido atacado por peão).
+- `king_safety`: escudo de peões < 2 OU coluna sem peão aliado adjacente ao rei
+  OU rei preso no centro (colunas c-f, sem direito de roque, dama adversária viva).
+  Continua gateado pela presença de atacantes (não dispara em finais).
 
 Os 17 conceitos detectados:
 
@@ -205,33 +212,50 @@ open_engine() -> chess.engine.SimpleEngine
 # Abre uma instância do Stockfish. Caller responsável por engine.quit().
 
 validate_move(board_before, move_played) -> dict
-# Abre/fecha engine internamente. Para uma posição isolada.
+# Abre/fecha engine internamente. Para uma posição isolada (passada única).
 
-batch_validate(positions: list[tuple], engine=None) -> list[dict]
+batch_validate(positions: list[tuple], engine=None, depth=STOCKFISH_DEPTH,
+               confirm_depth=None) -> list[dict]
 # positions: lista de (board_before, move_played)
-# engine: instância existente (None = cria e fecha a própria)
-# Resolve posições via cache SQLite antes de abrir o engine.
-# Retorna lista de dicts: {is_error, eval_before, eval_after, error_magnitude, best_move}
+# engine: instância existente (None = cria e fecha a própria; abertura é lazy —
+#         se tudo vier do cache, o engine nem abre)
+# Duas passadas: triagem em `depth` + confirmação dos erros em `confirm_depth`
+# (default STOCKFISH_CONFIRM_DEPTH). A confirmação usa MultiPV=2: se o lance
+# jogado era a 2ª melhor opção com gap ≤ 50cp, não é erro (posição difícil).
+# Cache SQLite por (fen, depth) consultado em ambas as passadas.
+# Retorna: {is_error, eval_before, eval_after, error_magnitude, delta_winp,
+#           involves_mate, best_move}
 
 evaluate_fen(fen: str, depth: int = STOCKFISH_DEPTH, use_cache: bool = True) -> dict
 # {score_cp, score_side, is_mate, mate_in, best_move, depth, turn}
 ```
 
-**Correção de falso positivo:** se `move_played == best_move`, `is_error` é forçado
-a `False` independentemente da diferença de avaliação (efeito horizonte em profundidade fixa).
+**Critério de erro (`_classify`):** `is_error` exige TODAS as condições:
+1. lance jogado ≠ melhor lance (efeito horizonte: melhor lance nunca é erro)
+2. `error_magnitude > ERROR_THRESHOLD_CP` (piso absoluto)
+3. `delta_winp > WINP_ERROR_THRESHOLD` — queda de probabilidade de vitória do
+   jogador (WinP = 1/(1+e^(-0.00368·cp)), modelo Lichess). Substitui o antigo
+   guard de "posição já decidida": swings dentro de posição ganha/perdida quase
+   não movem a WinP e são descartados naturalmente.
+4. o lance jogado não é uma captura que recupera material (`_is_winning_capture`)
 
 ### `modules/concept_relevance.py`
 ```python
 is_instructive(board_before, move_played_uci, best_move_uci, concept_key, player_color) -> bool
 is_missed_tactic(board_before, move_played_uci, best_move_uci, player_color) -> bool
+is_converted_tactic(board_before, move_played_uci, best_move_uci, player_color) -> bool
 ```
 
 `is_missed_tactic()` — `True` quando o melhor lance era uma **captura que ganha material**
-recusada pelo jogador. A captura ganha material quando a peça capturada está indefesa
-(material de graça) ou vale mais que a peça capturante (troca favorável). Retorna `False`
-se faltar `best_move`/`move_played`, se o jogador jogou o melhor lance, se o melhor lance
-não é captura, ou em troca de valor igual. Usada por `build_profile()` como gate de
-precedência tática antes dos conceitos estratégicos.
+(decidido por SEE em `_is_material_winning_capture`, considerando a sequência completa
+de recapturas) recusada pelo jogador. Retorna `False` se faltar `best_move`/`move_played`,
+se o jogador jogou o melhor lance, se o melhor lance não é captura, ou em troca igual.
+Usada por `build_profile()` como gate de precedência tática antes dos conceitos estratégicos.
+
+`is_converted_tactic()` — contraparte: `True` quando o jogador **jogou** a captura
+ganhadora que era o melhor lance. Alimenta o denominador (`total_occurrences`) do
+conceito `missed_tactic`, fazendo a taxa de erro significar "táticas perdidas /
+oportunidades táticas" em vez de ~100% por construção.
 
 `is_instructive()` — três gates em ordem de custo crescente:
 1. O jogador não jogou o melhor lance
@@ -264,9 +288,13 @@ load_profile(path: str) -> dict
 Estrutura de retorno do perfil:
 ```json
 {
+  "generated_at": "YYYY-MM-DD HH:MM UTC",
+  "metadata": {"player": str, "source": "pgn|chess_com", "depth": int},
   "total_games": int,
   "total_positions_analyzed": int,
   "total_errors_detected": int,
+  "total_missed_checkmates": int,
+  "total_allowed_checkmates": int,
   "overall_error_rate": float,
   "weaknesses": [
     {
@@ -279,7 +307,9 @@ Estrutura de retorno do perfil:
         {
           "game_id": str, "white": str, "black": str,
           "player_color": "white"|"black",
+          "game_url": str, "date": str, "move_number": int,
           "fen": str, "move_played": str, "best_move": str,
+          "eval_before": int, "eval_after": int,
           "error_magnitude": float
         }
       ]
@@ -287,6 +317,8 @@ Estrutura de retorno do perfil:
   ]
 }
 ```
+(`metadata` é adicionado por `main._build_profile_phase`; os campos novos de
+`sample_positions` são opcionais — perfis antigos sem eles continuam funcionando.)
 
 ### `modules/ai_diagnostician.py`
 ```python
@@ -336,6 +368,9 @@ db.cache_stats() -> {"cached_evals": int}
 
 # Posições
 pos_id = db.insert_position(pos_dict) -> int
+db.find_position(fen, move_played, white, black, source) -> int | None
+# Dedupe: _persist_games_to_db consulta antes de inserir — re-análises do mesmo
+# jogador não duplicam posições nem resultados de análise.
 db.query_positions(min_rating, max_rating, eco, opening_name, player_color, source, limit) -> list
 db.count_positions() -> int
 
@@ -368,11 +403,15 @@ analyze_player_from_username(username, n_games=50, on_progress=None)
 ```
 
 Sequência interna:
-1. Carrega partidas (PGN ou Chess.com)
+1. Carrega partidas (PGN ou Chess.com), extraindo metadados dos headers
+   (Link → game_url, UTCDate/Date, ECO, ECOUrl → opening, WhiteElo/BlackElo)
 2. Abre **uma única instância** do Stockfish para todas as partidas
-3. Por jogo: `detect_concepts()` em cada posição → `batch_validate()` apenas nas posições com pelo menos um conceito detectado
-4. Persiste tudo no SQLite via `_persist_games_to_db()`
-5. `build_profile()` — aplica `is_instructive()` como gate causal
+3. Por jogo: pula os primeiros `OPENING_MOVES_TO_SKIP` lances completos →
+   `detect_concepts()` em cada posição → `batch_validate()` (duas passadas)
+   apenas nas posições com pelo menos um conceito detectado
+4. Persiste tudo no SQLite via `_persist_games_to_db()` (com dedupe)
+5. `build_profile()` — aplica `is_instructive()` como gate causal; adiciona
+   `generated_at`; `_build_profile_phase` anexa `metadata` (player/source/depth)
 6. `diagnose()` — chama Claude, retorna diagnóstico bilíngue
 
 `on_progress(stage, current, total, message)` — callback opcional para a UI do Streamlit
@@ -409,9 +448,27 @@ na sidebar sincroniza automaticamente.
 ```python
 t("chave")                # retorna string no idioma atual (st.session_state.lang)
 t("chave", param=valor)   # com interpolação
-# 85 chaves, EN e PT-BR simétricas
+# 107 chaves, EN e PT-BR simétricas
 # Idioma: st.radio com key="lang" → persiste em session_state
 ```
+
+**Nomes de conceito localizados (`ui/concepts.py`):**
+```python
+concept_label(key)       # nome do conceito no idioma ativo (name/name_en do JSON)
+concept_category(key)    # categoria Silman canônica (PT)
+category_label(category) # categoria traduzida (CATEGORY_LABELS, 6 categorias)
+```
+Toda a UI (tabela, gráficos, explorer) usa `concept_label()` em vez de
+`detection_key.title()`.
+
+**Melhorias da UI:**
+- Explorer: lances em SAN (`board.san`), número do lance, avaliação antes→depois,
+  data e oponente no título do expander, link para a partida no Chess.com
+  (`game_url`), cache do "Ask AI" por FEN+idioma.
+- Profile Dashboard: caption com `generated_at`/fonte/profundidade, radar Plotly
+  de erros por categoria Silman (`build_category_radar`) e comparação de perfis
+  lado a lado (`build_comparison_chart`, multiselect de 2+ perfis).
+- Analyze: upload de PGN via `tempfile.NamedTemporaryFile` (sem colisão de nomes).
 
 ---
 
@@ -458,9 +515,9 @@ Conceito tático derivado (atribuído por gate de precedência, não por detecto
 ## Testes
 
 ```bash
-pytest                                  # 244 testes, todos passando
+pytest                                  # 269 testes, todos passando
 pytest -v --tb=short
-pytest tests/test_position_analyzer.py  # 59 testes com FENs conhecidas
+pytest tests/test_position_analyzer.py  # 78 testes com FENs conhecidas
 pytest tests/test_pipeline_e2e.py -v    # integração real (requer Stockfish)
 ```
 
@@ -468,16 +525,17 @@ Cobertura por arquivo:
 
 | Arquivo | Testes | Escopo |
 |---------|--------|--------|
-| `test_position_analyzer.py` | 59 | FENs específicas para cada um dos 17 detectores |
+| `test_position_analyzer.py` | 78 | FENs específicas para os 17 detectores + `static_exchange_gain` (SEE) |
+| `test_profile_builder.py` | 27 | Checkmates; precedência `missed_tactic`; denominador de oportunidades |
+| `test_stockfish_validator.py` | 23 | Mock `popen_uci`, cache, guards ΔWinP, passada de confirmação/MultiPV |
+| `test_concept_relevance.py` | 20 | Gates causais, scoring, `is_missed_tactic`/`is_converted_tactic` via SEE |
+| `test_chess_com_loader.py` | 16 | Mock HTTP, detecção de cor, limite n_games |
 | `test_app.py` | 15 | AppTest: startup, i18n, estado vazio, fixture com perfil |
+| `test_ai_diagnostician.py` | 14 | Mock cliente Anthropic, formato bilíngue EN/PT |
 | `test_pipeline_e2e.py` | 13 | Integração real Stockfish; `@skip_no_sf` se binário ausente |
-| `test_stockfish_validator.py` | 11 | Mock `popen_uci`, cache via `_get_db` |
+| `test_db.py` | 12 | Cache, posições, `find_position`, resultados de análise |
 | `test_pgn_loader.py` | 11 | Parsing PGN, iteração de posições |
 | `test_cli.py` | 11 | `_main(argv=...)`, roteamento pgn vs username, flags |
-| `test_chess_com_loader.py` | 11 | Mock HTTP, detecção de cor, limite n_games |
-| `test_profile_builder.py` | 26 | `make_position()` bypassa `is_instructive`; checkmates; precedência `missed_tactic` |
-| `test_concept_relevance.py` | 16 | Gates causais, scoring por conceito, `is_missed_tactic` |
-| `test_ai_diagnostician.py` | 14 | Mock cliente Anthropic, formato bilíngue EN/PT |
 | `test_main.py` | 10 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games` |
 | `test_diagnosis_card.py` | 6 | `format_root_cause`, `format_weakness_table`, `format_study_priority` |
 | `test_weakness_chart.py` | 6 | Figuras Plotly, ordenação, lista vazia |
@@ -502,12 +560,33 @@ Observações:
 - `king_safety` e `overloaded_piece` recorrentes nos 3 perfis
 - Diagnósticos Claude com confiança HIGH nos 3 casos; causas raiz distintas e coerentes
 
+**Re-validação após o endurecimento das regras (2026-07-02, diogenesdie, 20 partidas):**
+
+| Métrica | Regras antigas | Regras novas |
+|---------|---------------|--------------|
+| Taxa de erro global | 35,5% | 13,4% |
+| Fraquezas recorrentes | 8 | 5 |
+| Conceito dominante | hanging_piece 18 / open_file 10 / weak_square 8 | missed_tactic 8 (12% das oportunidades) / hanging_piece 6 / weak_square 5 |
+
+A queda na taxa de erro vem de três fontes: skip de abertura (menos posições, menos
+ruído), ΔWinP (swings em posições decididas descartados) e passada de confirmação
+(falsos positivos de horizonte eliminados em depth 16). O perfil resultante é mais
+enxuto e o sinal tático (missed_tactic/hanging_piece) fica corretamente no topo para
+um jogador ~500.
+
 ---
 
 ## Notas Acadêmicas (TCC)
 
 - Arquitetura híbrida de três camadas: detecção determinística → validação quantitativa → raciocínio causal
 - O LLM não gera texto pedagógico — atua como componente de raciocínio que classifica dados quantitativos brutos
+- Erro definido por queda de **probabilidade de vitória** (ΔWinP, modelo do Lichess),
+  não por centipawns brutos — normaliza o significado do erro pelo contexto da posição
+  e substitui heurísticas ad-hoc ("posição já decidida") por um critério único citável
+- Validação em **duas passadas** (triagem rasa + confirmação profunda com MultiPV=2):
+  compromisso custo/precisão que elimina falsos positivos de efeito horizonte
+- Detectores usam **SEE** (static exchange evaluation) para raciocínio material
+  (peça pendurada, tática perdida/convertida) em vez de heurísticas de 1 lance
 - `is_instructive()` estabelece vínculo causal entre erro e conceito (vs. mera co-ocorrência)
 - Precedência tática (`is_missed_tactic()`): erros táticos (captura ganhadora recusada) são
   separados dos estratégicos via conceito `missed_tactic`, evitando que vazem para conceitos
