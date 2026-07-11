@@ -136,7 +136,7 @@ def render():
 
         # Stockfish search depth — shared by both sources. Higher = more accurate
         # (fewer shallow-search false positives) but slower.
-        depth = st.slider(t("analyze.depth.label"), min_value=8, max_value=16,
+        depth = st.slider(t("analyze.depth.label"), min_value=8, max_value=12,
                           value=STOCKFISH_DEPTH, step=1, key="analyze_depth",
                           help=t("analyze.depth.help"))
 
