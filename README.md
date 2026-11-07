@@ -54,8 +54,10 @@ python main.py --user sprandel --pgn partidas.pgn --color white
 python eval_fen.py "<FEN>" --depth 15 --json
 ```
 
-Os perfis e diagnósticos gerados são salvos em `output/` como
-`{user}_profile.json` e `{user}_diagnosis.json`.
+Cada análise (perfil + diagnóstico) fica salva no SQLite (`data/profiler.db`, tabela
+`analyses`) e aparece no seletor da barra lateral. A CLI também exporta
+`output/{user}_profile.json` e `output/{user}_diagnosis.json`; arquivos antigos em
+`output/` são importados automaticamente pela interface.
 
 ## Testes
 

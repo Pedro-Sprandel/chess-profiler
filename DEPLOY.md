@@ -46,7 +46,8 @@ Fly.io / Railway work the same way: Docker image + one env secret + a volume at 
   trusted handful, not for the open internet.
 - Picking a tiny instance is okay; analyses are CPU-bound (Stockfish). One or two people
   analyzing at once is fine. If several run simultaneously expect them to be slower.
-- Profiles are keyed by chess.com nickname. If two friends analyze the **same** nickname,
-  the second overwrites the first — use the delete + profile selector to manage.
+- Every run is stored as its own analysis in SQLite (`analyses` table under `DATA_DIR`),
+  so analyzing the same nickname twice keeps both — pick or delete them in the sidebar.
+  Old `output/*_profile.json` files are imported automatically on first load.
 - Free tiers that sleep/restart will keep your data **only** because it's on the `/data`
   volume. Without a persistent disk, profiles are wiped on every redeploy.

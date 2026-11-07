@@ -1,134 +1,147 @@
-import os
 import json
+
 import pandas as pd
 import streamlit as st
+
 from ui.components.weakness_chart import (
-    build_error_count_chart,
-    build_error_magnitude_chart,
     build_category_radar,
     build_comparison_chart,
+    build_error_count_chart,
+    build_error_magnitude_chart,
 )
+from ui.concepts import category_label, concept_category, concept_label
 from ui.i18n import t
-from ui.concepts import concept_label
-from ui.profiles import display_label
-from config import OUTPUT_DIR
+from ui.profiles import analysis_label, format_date
+from ui.store import get_analysis, list_analyses
+from ui.style import anchor, section_header
+
+_CHART_CONFIG = {"displayModeBar": False}
+
+
+def _meta_line(record: dict) -> str:
+    profile = record["profile"]
+    meta = profile.get("metadata", {})
+    source = meta.get("source") or record.get("source")
+    source_label = t(f"profile.source.{source}") if source in ("chess_com", "pgn") else (source or "—")
+    return t(
+        "profile.meta",
+        subject=record.get("subject", "—"),
+        when=format_date(record.get("created_at")),
+        source=source_label,
+        depth=meta.get("depth") or record.get("depth") or "—",
+    )
 
 
 def render():
-    st.markdown('<a name="profile-dashboard"></a>', unsafe_allow_html=True)
-    st.title(t("profile.title"))
-
-    selected = st.session_state.get("active_profile")
-    if not selected:
+    anchor("profile-dashboard")
+    record = get_analysis(st.session_state.get("active_profile"))
+    if record is None:
+        section_header(t("profile.eyebrow"), t("profile.title"))
         st.info(t("profile.no_profiles"))
         return
 
-    profile_path = os.path.join(OUTPUT_DIR, selected)
-    if not os.path.exists(profile_path):
-        st.info(t("profile.no_profiles"))
-        return
-
-    with open(profile_path, "r", encoding="utf-8") as f:
-        profile = json.load(f)
-
-    # ── Metadata caption ──────────────────────────────────────────────────────
-    meta = profile.get("metadata", {})
-    if profile.get("generated_at") or meta:
-        st.caption(t(
-            "profile.meta",
-            when=profile.get("generated_at", "?"),
-            source=meta.get("source", "?"),
-            depth=meta.get("depth", "?"),
-        ))
+    profile = record["profile"]
+    section_header(t("profile.eyebrow"), t("profile.title"), _meta_line(record))
 
     # ── Metrics row ───────────────────────────────────────────────────────────
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    col1.metric(t("profile.metric.games"), profile["total_games"])
-    col2.metric(t("profile.metric.positions"), profile["total_positions_analyzed"])
-    col3.metric(t("profile.metric.errors"), profile["total_errors_detected"])
-    col4.metric(t("profile.metric.missed_mates"), profile.get("total_missed_checkmates", 0))
-    col5.metric(t("profile.metric.allowed_mates"), profile.get("total_allowed_checkmates", 0))
-    col6.metric(t("profile.metric.error_rate"), f"{profile['overall_error_rate'] * 100:.1f}%")
-
-    st.divider()
+    cols = st.columns(6)
+    cols[0].metric(t("profile.metric.games"), profile["total_games"], border=True)
+    cols[1].metric(t("profile.metric.positions"), profile["total_positions_analyzed"], border=True)
+    cols[2].metric(t("profile.metric.errors"), profile["total_errors_detected"], border=True)
+    cols[3].metric(t("profile.metric.error_rate"), f"{profile['overall_error_rate'] * 100:.1f}%", border=True)
+    cols[4].metric(t("profile.metric.missed_mates"), profile.get("total_missed_checkmates", 0), border=True)
+    cols[5].metric(t("profile.metric.allowed_mates"), profile.get("total_allowed_checkmates", 0), border=True)
 
     weaknesses = profile.get("weaknesses", [])
-
     if not weaknesses:
-        st.warning(t("profile.no_weaknesses"))
+        st.write("")
+        st.info(t("profile.no_weaknesses"))
         return
 
     # ── Charts ────────────────────────────────────────────────────────────────
-    col_left, col_right = st.columns(2)
-
+    st.write("")
+    col_left, col_right = st.columns(2, gap="large")
     with col_left:
-        st.plotly_chart(build_error_count_chart(weaknesses), use_container_width=True)
-
+        st.plotly_chart(build_error_count_chart(weaknesses), use_container_width=True, config=_CHART_CONFIG)
     with col_right:
-        st.plotly_chart(build_error_magnitude_chart(weaknesses), use_container_width=True)
+        st.plotly_chart(build_error_magnitude_chart(weaknesses), use_container_width=True, config=_CHART_CONFIG)
 
-    st.plotly_chart(build_category_radar(weaknesses), use_container_width=True)
-
-    # ── Error rate table ──────────────────────────────────────────────────────
-    st.subheader(t("profile.table.subheader"))
-
-    rows = [
+    # ── Detail table ──────────────────────────────────────────────────────────
+    st.markdown(f"### {t('profile.table.subheader')}")
+    rate_col = t("profile.col.error_rate")
+    df = pd.DataFrame([
         {
             t("profile.col.concept"):    concept_label(w["concept"]),
+            t("profile.col.category"):   category_label(concept_category(w["concept"]) or "—"),
             t("profile.col.error_occ"):  w["error_occurrences"],
             t("profile.col.total_occ"):  w["total_occurrences"],
-            t("profile.col.error_rate"): round(w["error_rate"] * 100, 1),
+            rate_col:                    round(w["error_rate"] * 100, 1),
             t("profile.col.avg_error"):  w["avg_error_magnitude_cp"],
         }
-        for w in weaknesses
-    ]
-
-    df = pd.DataFrame(rows)
-
-    # Red heat-map on the error-rate column without pulling in matplotlib
-    # (Styler.background_gradient requires it). Normalize across the column and
-    # shade from light to dark red.
-    rate_col = t("profile.col.error_rate")
-    rates = df[rate_col].astype(float)
-    lo, hi = rates.min(), rates.max()
-    span = (hi - lo) or 1.0
-
-    def _heat(v):
-        norm = (float(v) - lo) / span
-        text = "#ffffff" if norm > 0.6 else "#000000"
-        return f"background-color: rgba(204, 0, 0, {0.12 + 0.6 * norm:.3f}); color: {text}"
-
+        for w in sorted(weaknesses, key=lambda x: x["error_occurrences"], reverse=True)
+    ])
     st.dataframe(
-        df.style.map(_heat, subset=[rate_col]),
+        df,
         use_container_width=True,
         hide_index=True,
+        column_config={
+            rate_col: st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
+            t("profile.col.avg_error"): st.column_config.NumberColumn(format="%.0f"),
+        },
+    )
+    st.download_button(
+        t("profile.export"),
+        data=json.dumps(profile, indent=2, ensure_ascii=False),
+        file_name=f"{record.get('subject', 'profile')}_profile.json",
+        mime="application/json",
+        key="profile_export",
     )
 
-    # ── Profile comparison ────────────────────────────────────────────────────
-    all_profiles = sorted(
-        f for f in os.listdir(OUTPUT_DIR) if f.endswith("_profile.json")
-    ) if os.path.isdir(OUTPUT_DIR) else []
+    # ── Silman categories ─────────────────────────────────────────────────────
+    st.write("")
+    col_radar, col_cat = st.columns(2, gap="large", vertical_alignment="center")
+    with col_radar:
+        st.plotly_chart(build_category_radar(weaknesses), use_container_width=True, config=_CHART_CONFIG)
+    with col_cat:
+        totals: dict[str, int] = {}
+        for w in weaknesses:
+            cat = category_label(concept_category(w["concept"]) or "—")
+            totals[cat] = totals.get(cat, 0) + w["error_occurrences"]
+        grand = sum(totals.values()) or 1
+        share_col = t("profile.col.share")
+        st.dataframe(
+            pd.DataFrame([
+                {t("profile.col.category"): cat, t("profile.col.error_occ"): n,
+                 share_col: round(100 * n / grand, 1)}
+                for cat, n in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+            ]),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                share_col: st.column_config.ProgressColumn(format="%.0f%%", min_value=0, max_value=100),
+            },
+        )
 
-    if len(all_profiles) >= 2:
-        st.divider()
-        st.subheader(t("profile.compare.subheader"))
+    # ── Comparison ────────────────────────────────────────────────────────────
+    summaries = {a["name"]: a for a in list_analyses()}
+    if len(summaries) >= 2:
+        st.write("")
+        st.markdown(f"### {t('profile.compare.subheader')}")
+        selected = record["name"]
         chosen = st.multiselect(
             t("profile.compare.label"),
-            all_profiles,
-            default=[selected] if selected in all_profiles else [],
-            format_func=display_label,
+            list(summaries),
+            default=[selected] if selected in summaries else [],
+            format_func=lambda n: analysis_label(summaries[n]),
             key="profile_compare_select",
         )
         if len(chosen) >= 2:
             series = []
-            for fname in chosen:
-                try:
-                    with open(os.path.join(OUTPUT_DIR, fname), "r", encoding="utf-8") as f:
-                        p = json.load(f)
-                    series.append((display_label(fname), p.get("weaknesses", [])))
-                except (OSError, json.JSONDecodeError):
-                    continue
+            for name in chosen:
+                other = get_analysis(name)
+                if other:
+                    series.append((analysis_label(summaries[name]), other["profile"].get("weaknesses", [])))
             if len(series) >= 2:
-                st.plotly_chart(build_comparison_chart(series), use_container_width=True)
+                st.plotly_chart(build_comparison_chart(series), use_container_width=True, config=_CHART_CONFIG)
         else:
             st.caption(t("profile.compare.hint"))

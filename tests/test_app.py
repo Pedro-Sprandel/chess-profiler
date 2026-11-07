@@ -1,5 +1,4 @@
 """Streamlit AppTest coverage for app.py and all page sections."""
-import json
 import os
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -91,25 +90,22 @@ SAMPLE_DIAGNOSIS = {
     },
 }
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output")
-PYTEST_PROFILE = "_pytest_profile.json"
-PYTEST_DIAGNOSIS = "_pytest_diagnosis.json"
+PYTEST_PROFILE = "_pytest"
 
 
 @pytest.fixture()
 def with_profile_files():
-    """Write sample profile + diagnosis to output/, yield filename, then clean up."""
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    profile_path = os.path.join(OUTPUT_DIR, PYTEST_PROFILE)
-    diagnosis_path = os.path.join(OUTPUT_DIR, PYTEST_DIAGNOSIS)
-    with open(profile_path, "w") as f:
-        json.dump(SAMPLE_PROFILE, f)
-    with open(diagnosis_path, "w") as f:
-        json.dump(SAMPLE_DIAGNOSIS, f)
+    """Store a sample analysis (profile + diagnosis) in the test DB and yield its name.
+
+    conftest.py points every Database() at a per-test temp file, so nothing leaks
+    into data/profiler.db.
+    """
+    from modules.db import Database
+    with Database() as db:
+        db.save_analysis(PYTEST_PROFILE, SAMPLE_PROFILE, subject="pytest_player",
+                         source="pgn", depth=10, n_games=2)
+        db.save_diagnosis(PYTEST_PROFILE, SAMPLE_DIAGNOSIS)
     yield PYTEST_PROFILE
-    for p in (profile_path, diagnosis_path):
-        if os.path.exists(p):
-            os.remove(p)
 
 
 class TestAppStartup:
@@ -211,6 +207,47 @@ class TestWithProfileData:
         assert not at.exception
         assert at.session_state.active_profile == with_profile_files
 
+    def test_defaults_to_most_recent_analysis(self, with_profile_files):
+        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at.run()
+        assert not at.exception
+        assert at.session_state.active_profile == with_profile_files
+
+    def test_legacy_filename_in_session_is_normalized(self, with_profile_files):
+        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at.session_state["active_profile"] = with_profile_files + "_profile.json"
+        at.run()
+        assert not at.exception
+        assert at.session_state.active_profile == with_profile_files
+
+    def test_deleted_selection_falls_back(self, with_profile_files):
+        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at.session_state["active_profile"] = "does_not_exist"
+        at.run()
+        assert not at.exception
+        assert at.session_state.active_profile == with_profile_files
+
+    def test_diagnosis_cards_render(self, with_profile_files):
+        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at.session_state["active_profile"] = with_profile_files
+        at.session_state["lang"] = "en"
+        at.run()
+        assert not at.exception
+        html = " ".join(m.value for m in at.markdown)
+        assert "Static Thinking" in html
+
+
+class TestMissingDiagnosis:
+    def test_generate_button_shown_when_no_diagnosis(self):
+        from modules.db import Database
+        with Database() as db:
+            db.save_analysis("_nodiag", SAMPLE_PROFILE, subject="x")
+        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at.session_state["active_profile"] = "_nodiag"
+        at.run()
+        assert not at.exception
+        assert any(b.key == "diagnosis_generate" for b in at.button)
+
 
 class TestAnalyzePageInputs:
     def test_no_username_shows_error(self):
@@ -223,3 +260,19 @@ class TestAnalyzePageInputs:
         assert not at.exception
         assert any("username" in (e.value or "").lower() or "usuário" in (e.value or "").lower()
                    for e in at.error)
+
+
+class TestDeleteAnalysis:
+    def test_delete_removes_from_db_and_falls_back(self, with_profile_files):
+        from modules.db import Database
+        with Database() as db:
+            db.save_analysis("_older", SAMPLE_PROFILE, subject="older",
+                             created_at="2020-01-01 00:00:00")
+        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at.session_state["active_profile"] = with_profile_files
+        at.run()
+        next(b for b in at.button if b.key == "delete_confirm").click().run()
+        assert not at.exception
+        with Database() as db:
+            assert db.get_analysis(with_profile_files) is None
+        assert at.session_state.active_profile == "_older"

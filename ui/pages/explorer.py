@@ -1,13 +1,24 @@
-import os
-import json
+from html import escape
+
 import chess
 import chess.svg
 import streamlit as st
 import streamlit.components.v1 as components
+
 from modules.ai_diagnostician import explain_position
-from ui.i18n import t
 from ui.concepts import concept_label
-from config import OUTPUT_DIR
+from ui.i18n import t
+from ui.store import get_analysis, get_explanation, save_explanation
+from ui.style import ERROR, GOOD, INK, MUTED, anchor, section_header, swatch
+
+BOARD_COLORS = {
+    "square light": "#DEE3E6",
+    "square dark": "#8CA2AD",
+    "square light lastmove": "#C3D0D6",
+    "square dark lastmove": "#7891A0",
+    "margin": "#FFFFFF",
+    "coord": "#5F6B7A",
+}
 
 
 def _san(fen: str, uci: str | None) -> str | None:
@@ -29,51 +40,19 @@ def _fmt_eval(cp) -> str:
     return f"{cp / 100:+.1f}"
 
 
-def render():
-    st.markdown('<a name="game-explorer"></a>', unsafe_allow_html=True)
-    st.title(t("explorer.title"))
+def _fmt_cp(v) -> str:
+    try:
+        return f"{float(v):.0f}"
+    except (TypeError, ValueError):
+        return "?"
 
-    selected = st.session_state.get("active_profile")
-    if not selected:
-        st.info(t("explorer.no_profiles"))
-        return
 
-    profile_path = os.path.join(OUTPUT_DIR, selected)
-    if not os.path.exists(profile_path):
-        st.info(t("explorer.no_profiles"))
-        return
+def _ordered_positions(all_positions: list) -> tuple[list, int]:
+    """One representative position per game (largest error) first, then the rest.
 
-    with open(profile_path, "r", encoding="utf-8") as f:
-        profile = json.load(f)
-
-    weaknesses = [w for w in profile.get("weaknesses", []) if w.get("sample_positions")]
-
-    if not weaknesses:
-        st.warning(t("explorer.no_positions"))
-        return
-
-    # ── Concept selector ──────────────────────────────────────────────────────
-    concept_options = {concept_label(w["concept"]): w for w in weaknesses}
-    selected_concept = st.selectbox(t("explorer.select_concept"), list(concept_options.keys()), key="explorer_concept_select")
-    weakness = concept_options[selected_concept]
-
-    st.markdown(t(
-        "explorer.summary",
-        concept=selected_concept,
-        errors=weakness["error_occurrences"],
-        rate=weakness["error_rate"] * 100,
-        avg=weakness["avg_error_magnitude_cp"],
-    ))
-
-    st.divider()
-
-    # ── Position viewer ───────────────────────────────────────────────────────
-    # Default view shows one representative position per game (the largest error),
-    # since consecutive flagged positions in a game are usually the same mistake a
-    # few moves apart. "Load more" then reveals the rest (incl. same-game ones), in
-    # descending error order, up to every error of this type.
-    all_positions = weakness["sample_positions"]
-
+    Consecutive flagged positions in a game are usually the same mistake a few
+    moves apart, so the default view shows the worst one per game.
+    """
     def _mag(p):
         return p.get("error_magnitude") or 0
 
@@ -86,111 +65,169 @@ def render():
     primary = sorted((all_positions[i] for i in primary_idxs), key=_mag, reverse=True)
     secondary = sorted((p for i, p in enumerate(all_positions) if i not in primary_idxs),
                        key=_mag, reverse=True)
-    ordered = primary + secondary
+    return primary + secondary, len(primary)
+
+
+def _board_html(fen, move_played, best_move, player_color, white_name, black_name) -> str:
+    board = chess.Board(fen)
+    orientation = chess.WHITE if player_color == "white" else chess.BLACK
+
+    arrows = []
+    if move_played:
+        m = chess.Move.from_uci(move_played)
+        arrows.append(chess.svg.Arrow(m.from_square, m.to_square, color=ERROR + "cc"))
+    if best_move and best_move != move_played:
+        m = chess.Move.from_uci(best_move)
+        arrows.append(chess.svg.Arrow(m.from_square, m.to_square, color=GOOD + "cc"))
+
+    svg = chess.svg.board(board, arrows=arrows, size=380, orientation=orientation,
+                          colors=BOARD_COLORS)
+    if orientation == chess.WHITE:
+        top, bottom = black_name, white_name
+    else:
+        top, bottom = white_name, black_name
+
+    font = "font-family:Inter,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px"
+    return f"""
+        <div style="{font};width:380px">
+          <div style="color:{MUTED};margin-bottom:6px">{escape(top)}</div>
+          {svg}
+          <div style="color:{INK};font-weight:600;margin-top:6px">{escape(bottom)}
+            <span style="color:{MUTED};font-weight:400">{t("explorer.you")}</span></div>
+        </div>
+    """
+
+
+def _details_html(pos: dict, fen: str, move_played, best_move) -> str:
+    rows = []
+    if pos.get("date"):
+        rows.append((t("explorer.date"), escape(str(pos["date"]))))
+    if pos.get("move_number"):
+        rows.append((t("explorer.move_number"), str(pos["move_number"])))
+    if move_played:
+        rows.append((swatch(ERROR) + t("explorer.move_played"), f"<code>{escape(_san(fen, move_played))}</code>"))
+    if best_move:
+        key = "explorer.best_same" if best_move == move_played else "explorer.best_move"
+        rows.append((swatch(GOOD) + t(key), f"<code>{escape(_san(fen, best_move))}</code>"))
+    if pos.get("eval_before") is not None and pos.get("eval_after") is not None:
+        rows.append((t("explorer.eval_swing"),
+                     f"{_fmt_eval(pos['eval_before'])} → {_fmt_eval(pos['eval_after'])}"))
+    rows.append((t("explorer.error_cp"), f"−{_fmt_cp(pos.get('error_magnitude'))} cp"))
+    body = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows)
+    return f'<table class="cp-kv">{body}</table>'
+
+
+def _render_position(i: int, pos: dict, concept_key: str):
+    player_color = pos.get("player_color", "white")
+    white_name = pos.get("white", "White")
+    black_name = pos.get("black", "Black")
+    opponent = black_name if player_color == "white" else white_name
+    cp = _fmt_cp(pos.get("error_magnitude"))
+    if pos.get("move_number"):
+        label = t("explorer.expander", i=i + 1, opp=opponent, move=pos["move_number"], cp=cp)
+    else:
+        label = t("explorer.expander_nomove", i=i + 1, opp=opponent, cp=cp)
+
+    with st.expander(label, expanded=(i == 0)):
+        fen = pos.get("fen")
+        if not fen:
+            st.write(t("explorer.no_fen"))
+            return
+
+        move_played = pos.get("move_played")
+        best_move = pos.get("best_move")
+
+        col_board, col_info = st.columns([1, 1], gap="large")
+        with col_board:
+            components.html(
+                _board_html(fen, move_played, best_move, player_color, white_name, black_name),
+                height=450,
+            )
+        with col_info:
+            st.markdown(_details_html(pos, fen, move_played, best_move), unsafe_allow_html=True)
+            st.write("")
+            st.caption(t("explorer.fen"))
+            st.code(fen, language=None, wrap_lines=True)
+            game_link = pos.get("game_url") or (
+                pos["game_id"] if str(pos.get("game_id", "")).startswith("http") else None)
+            if game_link:
+                st.link_button(t("explorer.view_game"), game_link)
+
+            # ── Ask AI why this move is a mistake (cached in SQLite) ─────────
+            lang = st.session_state.get("lang", "pt")
+            explanation = get_explanation(fen, move_played, concept_key, lang)
+            err_key = f"explain_err::{fen}::{move_played}::{lang}"
+
+            if explanation is None and st.button(t("explorer.ask_ai"), key=f"btn_explain::{i}::{fen}::{move_played}::{lang}"):
+                with st.spinner(t("explorer.ai_thinking")):
+                    try:
+                        explanation = explain_position(
+                            fen=fen,
+                            move_played=move_played,
+                            best_move=best_move,
+                            concept_key=concept_key,
+                            error_magnitude=pos.get("error_magnitude"),
+                            player_color=player_color,
+                            lang=lang,
+                        )
+                        save_explanation(fen, move_played, concept_key, lang, explanation)
+                        st.session_state.pop(err_key, None)
+                    except Exception as e:
+                        st.session_state[err_key] = str(e)
+
+            if st.session_state.get(err_key):
+                st.error(t("analyze.error.failed", e=st.session_state[err_key]))
+
+        if explanation:
+            st.markdown(f"**{t('explorer.ai_title')}**")
+            st.markdown(explanation)
+
+
+def render():
+    anchor("game-explorer")
+    section_header(t("explorer.eyebrow"), t("explorer.title"), t("explorer.subtitle"))
+
+    record = get_analysis(st.session_state.get("active_profile"))
+    if record is None:
+        st.info(t("explorer.no_profiles"))
+        return
+
+    weaknesses = [w for w in record["profile"].get("weaknesses", []) if w.get("sample_positions")]
+    if not weaknesses:
+        st.info(t("explorer.no_positions"))
+        return
+
+    # ── Concept selector ──────────────────────────────────────────────────────
+    concept_options = {concept_label(w["concept"]): w for w in weaknesses}
+    col_sel, col_sum = st.columns([2, 3], gap="large", vertical_alignment="bottom")
+    with col_sel:
+        selected_concept = st.selectbox(t("explorer.select_concept"), list(concept_options.keys()),
+                                        key="explorer_concept_select")
+    weakness = concept_options[selected_concept]
+    with col_sum:
+        st.markdown(
+            f'<div style="color:{MUTED};padding-bottom:0.6rem">' + t(
+                "explorer.summary",
+                errors=weakness["error_occurrences"],
+                rate=weakness["error_rate"] * 100,
+                avg=_fmt_cp(weakness["avg_error_magnitude_cp"]),
+            ) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Position viewer ───────────────────────────────────────────────────────
+    ordered, n_primary = _ordered_positions(weakness["sample_positions"])
     total = len(ordered)
 
     # Show at least 3 (or all if fewer); default to the deduped per-game count.
-    show_key = f"explorer_show::{selected}::{selected_concept}"
-    default_n = min(total, max(3, len(primary)))
+    show_key = f"explorer_show::{record['name']}::{weakness['concept']}"
+    default_n = min(total, max(3, n_primary))
     show_n = min(st.session_state.get(show_key, default_n), total)
 
-    st.subheader(t("explorer.sample_positions", n=show_n))
-
+    st.caption(t("explorer.sample_positions", n=show_n, total=total))
     for i, pos in enumerate(ordered[:show_n]):
-        player_color = pos.get("player_color", "white")
-        white_name = pos.get("white", "White")
-        black_name = pos.get("black", "Black")
-        opponent = black_name if player_color == "white" else white_name
-        label = t("explorer.expander", i=i + 1, opp=opponent, cp=pos.get("error_magnitude", "?"))
-        with st.expander(label, expanded=(i == 0)):
-            fen = pos.get("fen")
-            if not fen:
-                st.write(t("explorer.no_fen"))
-                continue
+        _render_position(i, pos, weakness["concept"])
 
-            board = chess.Board(fen)
-            move_played = pos.get("move_played")
-            best_move = pos.get("best_move")
-            orientation = chess.WHITE if player_color == "white" else chess.BLACK
-
-            arrows = []
-            if move_played:
-                m = chess.Move.from_uci(move_played)
-                arrows.append(chess.svg.Arrow(m.from_square, m.to_square, color="#cc0000"))
-            if best_move and best_move != move_played:
-                m = chess.Move.from_uci(best_move)
-                arrows.append(chess.svg.Arrow(m.from_square, m.to_square, color="#00aa00"))
-
-            svg = chess.svg.board(board, arrows=arrows, size=360, orientation=orientation)
-
-            if orientation == chess.WHITE:
-                top_name, bottom_name = black_name, white_name
-            else:
-                top_name, bottom_name = white_name, black_name
-
-            col_board, col_info = st.columns([1, 1])
-            with col_board:
-                components.html(
-                    f"""
-                    <div style="font-family:sans-serif;text-align:center">
-                      <div style="margin-bottom:4px;font-weight:600;color:#555">{top_name}</div>
-                      {svg}
-                      <div style="margin-top:4px;font-weight:700;color:#000">{bottom_name} {t("explorer.you")}</div>
-                    </div>
-                    """,
-                    height=430,
-                )
-            with col_info:
-                game_line = pos.get("game_id", "?")
-                if pos.get("date"):
-                    game_line = f"{game_line} · {pos['date']}"
-                st.markdown(t("explorer.game", v=game_line))
-                if pos.get("move_number"):
-                    st.markdown(t("explorer.move_number", v=pos["move_number"]))
-                st.markdown(t("explorer.error_cp", v=pos.get("error_magnitude", "?")))
-                if pos.get("eval_before") is not None and pos.get("eval_after") is not None:
-                    st.markdown(t("explorer.eval_swing",
-                                  b=_fmt_eval(pos["eval_before"]),
-                                  a=_fmt_eval(pos["eval_after"])))
-                if move_played:
-                    st.markdown(t("explorer.move_played", v=_san(fen, move_played)))
-                if best_move:
-                    key = "explorer.best_same" if best_move == move_played else "explorer.best_move"
-                    st.markdown(t(key, v=_san(fen, best_move)))
-                st.markdown(t("explorer.fen", v=fen))
-                if pos.get("game_url"):
-                    st.markdown(f"[{t('explorer.view_game')}]({pos['game_url']})")
-
-            # ── Ask AI why this move is a mistake ─────────────────────────────
-            lang = st.session_state.get("lang", "pt")
-            # Cache the explanation per position+language so it persists across reruns.
-            cache_key = f"explain::{fen}::{move_played}::{lang}"
-
-            if st.button(t("explorer.ask_ai"), key=f"btn_{cache_key}"):
-                with st.spinner(t("explorer.ai_thinking")):
-                    try:
-                        st.session_state[cache_key] = {
-                            "text": explain_position(
-                                fen=fen,
-                                move_played=move_played,
-                                best_move=best_move,
-                                concept_key=weakness["concept"],
-                                error_magnitude=pos.get("error_magnitude"),
-                                player_color=player_color,
-                                lang=lang,
-                            )
-                        }
-                    except Exception as e:
-                        st.session_state[cache_key] = {"error": str(e)}
-
-            cached = st.session_state.get(cache_key)
-            if cached:
-                if "error" in cached:
-                    st.error(t("analyze.error.failed", e=cached["error"]))
-                else:
-                    st.info(cached["text"])
-
-    # ── Load more ─────────────────────────────────────────────────────────────
     if show_n < total:
         if st.button(t("explorer.load_more", shown=show_n, total=total), key=f"more_{show_key}"):
             st.session_state[show_key] = min(show_n + 3, total)

@@ -13,6 +13,7 @@ def format_weakness_table(diagnosis: dict) -> list:
     rows = []
     for item in diagnosis.get("weakness_classification", []):
         rows.append({
+            "key": item.get("concept", ""),
             "Concept": item.get("concept", "").replace("_", " ").title(),
             "Classification": item.get("classification", ""),
             "Reasoning": item.get("reasoning", ""),
@@ -26,6 +27,7 @@ def format_study_priority(diagnosis: dict) -> list:
     for item in sorted(diagnosis.get("study_priority", []), key=lambda x: x.get("priority_rank", 99)):
         items.append({
             "rank": item.get("priority_rank"),
+            "key": item.get("concept", ""),
             "concept": item.get("concept", "").replace("_", " ").title(),
             "chapter": item.get("silman_chapter", "?"),
             "page": item.get("silman_page", "?"),
