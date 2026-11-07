@@ -1,11 +1,11 @@
 import plotly.graph_objects as go
 from ui.i18n import t
 from ui.concepts import concept_label, concept_category, category_label, CATEGORY_LABELS
-from ui.style import ACCENT, ACCENT_SOFT, BORDER, ERROR, INK, MUTED, SUBTLE
+from ui.style import ACCENT, ACCENT_FILL, ACCENT_SOFT, BORDER, CARD, ERROR, GOOD, GRID, INK, MUTED, SUBTLE, WARN
 
 _FONT = dict(family="Inter, -apple-system, Segoe UI, Roboto, sans-serif", size=12, color=MUTED)
 # Ordered series colors for multi-profile comparison (desaturated, distinguishable).
-SERIES_COLORS = [ACCENT, ERROR, "#3C7A57", "#B07A1F", "#6B5B95", SUBTLE]
+SERIES_COLORS = [ACCENT, ERROR, GOOD, WARN, "#A78BCA", SUBTLE]
 
 
 def _style(fig: go.Figure, title: str, height: int) -> go.Figure:
@@ -14,12 +14,12 @@ def _style(fig: go.Figure, title: str, height: int) -> go.Figure:
         font=_FONT,
         height=height,
         margin=dict(l=10, r=20, t=48, b=10),
-        plot_bgcolor="#FFFFFF",
-        paper_bgcolor="#FFFFFF",
-        hoverlabel=dict(bgcolor="#FFFFFF", bordercolor=BORDER, font=dict(color=INK)),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        hoverlabel=dict(bgcolor=CARD, bordercolor=BORDER, font=dict(color=INK)),
         bargap=0.35,
     )
-    fig.update_xaxes(showgrid=True, gridcolor="#EEF0F3", zeroline=False, linecolor=BORDER)
+    fig.update_xaxes(showgrid=True, gridcolor=GRID, zeroline=False, linecolor=BORDER)
     fig.update_yaxes(showgrid=False, zeroline=False, linecolor=BORDER)
     return fig
 
@@ -74,7 +74,7 @@ def build_category_radar(weaknesses: list) -> go.Figure:
         r=values + values[:1],
         theta=categories + categories[:1],
         fill="toself",
-        fillcolor="rgba(47, 75, 102, 0.15)",
+        fillcolor=ACCENT_FILL,
         line=dict(color=ACCENT, width=2),
         marker=dict(size=5, color=ACCENT),
         hovertemplate="%{theta}: %{r}<extra></extra>",
@@ -82,10 +82,10 @@ def build_category_radar(weaknesses: list) -> go.Figure:
     _style(fig, t("chart.radar.title"), height=380)
     fig.update_layout(
         polar=dict(
-            bgcolor="#FFFFFF",
-            radialaxis=dict(visible=True, rangemode="tozero", gridcolor="#EEF0F3",
+            bgcolor="rgba(0,0,0,0)",
+            radialaxis=dict(visible=True, rangemode="tozero", gridcolor=GRID,
                             linecolor=BORDER, tickfont=dict(size=10, color=SUBTLE)),
-            angularaxis=dict(gridcolor="#EEF0F3", linecolor=BORDER, tickfont=dict(color=INK)),
+            angularaxis=dict(gridcolor=GRID, linecolor=BORDER, tickfont=dict(color=INK)),
         ),
         showlegend=False,
         margin=dict(l=95, r=95, t=56, b=30),
@@ -122,5 +122,5 @@ def build_comparison_chart(profiles: list[tuple[str, list]]) -> go.Figure:
         margin=dict(l=10, r=20, t=80, b=10),
     )
     fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor="#EEF0F3", title_text=t("chart.compare.y"))
+    fig.update_yaxes(showgrid=True, gridcolor=GRID, title_text=t("chart.compare.y"))
     return fig

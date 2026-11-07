@@ -7,17 +7,21 @@ from html import escape
 
 import streamlit as st
 
-# ── Palette (mirrors .streamlit/config.toml) ──────────────────────────────────
-INK = "#1C2127"
-MUTED = "#5F6B7A"
-SUBTLE = "#8A94A3"
-BORDER = "#E3E6EA"
-SURFACE = "#F4F5F7"
-ACCENT = "#2F4B66"       # slate blue — primary data series
-ACCENT_SOFT = "#8FA6BD"
-ERROR = "#A8432F"        # muted brick — "move played" / errors
-GOOD = "#3C7A57"         # muted green — "best move"
-WARN = "#B07A1F"
+# ── Palette (mirrors .streamlit/config.toml, dark) ────────────────────────────
+BG = "#0F1216"           # page background
+CARD = "#151A20"         # cards, chart and board background
+SURFACE = "#1A1F26"      # inputs, quote blocks
+GRID = "#232932"         # chart gridlines
+BORDER = "#2A3038"
+INK = "#E3E7EC"
+MUTED = "#9AA4B2"
+SUBTLE = "#6B7685"
+ACCENT = "#7FA3C7"       # slate blue — primary data series
+ACCENT_SOFT = "#4C6884"
+ACCENT_FILL = "rgba(127, 163, 199, 0.18)"
+ERROR = "#D9765F"        # muted brick — "move played" / errors
+GOOD = "#6DBE8C"         # muted green — "best move"
+WARN = "#D6A548"
 
 CLASSIFICATION_COLORS = {
     "PRIMARY": ERROR,
@@ -68,7 +72,7 @@ h3 {{ font-weight: 600 !important; font-size: 1.15rem !important; }}
 /* Cards */
 .cp-card {{
   border: 1px solid {BORDER}; border-radius: 6px; padding: 1rem 1.15rem;
-  background: #FFFFFF; margin-bottom: 0.75rem;
+  background: {CARD}; margin-bottom: 0.75rem;
 }}
 .cp-card h4 {{ margin: 0 0 0.35rem 0; font-size: 1rem; font-weight: 600; color: {INK}; }}
 .cp-card p {{ margin: 0; color: {MUTED}; font-size: 0.92rem; line-height: 1.55; }}

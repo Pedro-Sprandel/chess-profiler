@@ -61,7 +61,7 @@ v1/
 │   ├── db.py                       ← camada SQLite (6 tabelas, WAL mode)
 │   ├── analysis_store.py           ← importa perfis JSON legados de output/ para o SQLite
 │   └── fen_fetcher.py              ← busca FENs do Chess.com com filtros (não integrado ao pipeline)
-├── .streamlit/config.toml          ← tema (paleta sóbria, claro)
+├── .streamlit/config.toml          ← tema escuro (paleta sóbria)
 ├── ui/
 │   ├── i18n.py                     ← chaves EN/PT-BR, função t(key, **kwargs)
 │   ├── style.py                    ← paleta, CSS global, helpers (section_header, badge)
@@ -472,7 +472,7 @@ listener de scroll em `[data-testid="stMain"]`. Listener idempotente via
 `window.parent._spyListener` / `_spyEl`. Alterna a classe `active` no link da sidebar
 (estilo em `ui/style.py`).
 
-**Visual:** tema em `.streamlit/config.toml` + CSS em `ui/style.py` (paleta neutra com
+**Visual:** tema escuro em `.streamlit/config.toml` + CSS em `ui/style.py` (paleta neutra com
 um acento azul-ardósia, vermelho-tijolo para erros, verde para melhor lance; sem emojis).
 Seções usam `section_header(eyebrow, title, subtitle)`; gráficos Plotly compartilham
 `_style()` em `weakness_chart.py` (barras horizontais ordenadas).
