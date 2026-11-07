@@ -1,13 +1,19 @@
 """
 db.py — SQLite persistence layer for Chess Strategic Profiler.
 
-Three tables:
+Tables:
   fen_cache        : Stockfish evaluation cache keyed by (fen, depth).
                      Avoids re-analyzing the same position twice.
   positions        : FEN positions imported from real games (Chess.com or PGN).
                      Each row is one position from one game at one move.
   analysis_results : Concept detection + Stockfish verdict for each position.
                      Links back to positions via position_id.
+  analyses         : One row per profile run (the profile JSON + its AI diagnosis).
+                     Single source of truth for the UI — replaces scanning output/.
+  explanations     : Cache of the per-position "why is this a mistake?" AI answers,
+                     keyed by (fen, move_played, concept_key, lang).
+  legacy_imports   : Names of output/*_profile.json files already imported, so a
+                     profile deleted in the UI is not re-imported from its old file.
 
 Usage:
     from modules.db import Database
@@ -85,12 +91,47 @@ CREATE TABLE IF NOT EXISTS analysis_results (
 CREATE INDEX IF NOT EXISTS idx_analysis_position  ON analysis_results(position_id);
 CREATE INDEX IF NOT EXISTS idx_analysis_concept   ON analysis_results(concept_key);
 CREATE INDEX IF NOT EXISTS idx_analysis_is_error  ON analysis_results(is_error);
+
+CREATE TABLE IF NOT EXISTS analyses (
+    name               TEXT PRIMARY KEY,
+    subject            TEXT NOT NULL,
+    source             TEXT,
+    n_games            INTEGER,
+    depth              INTEGER,
+    total_games        INTEGER,
+    total_positions    INTEGER,
+    overall_error_rate REAL,
+    n_weaknesses       INTEGER,
+    profile_json       TEXT NOT NULL,
+    diagnosis_json     TEXT,
+    created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    diagnosed_at       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_analyses_subject ON analyses(subject);
+
+CREATE TABLE IF NOT EXISTS explanations (
+    fen         TEXT NOT NULL,
+    move_played TEXT NOT NULL DEFAULT '',
+    concept_key TEXT NOT NULL,
+    lang        TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    created_at  TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (fen, move_played, concept_key, lang)
+);
+
+CREATE TABLE IF NOT EXISTS legacy_imports (
+    name        TEXT PRIMARY KEY,
+    imported_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
 class Database:
-    def __init__(self, path: str | Path = DEFAULT_DB_PATH):
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None):
+        # Resolved at call time (not as a default argument) so tests can redirect
+        # every Database() to a temporary file by patching DEFAULT_DB_PATH.
+        self.path = Path(path) if path is not None else Path(DEFAULT_DB_PATH)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False: the connection is a module-level singleton reused
         # across Streamlit reruns, each of which may run on a different ScriptRunner
@@ -332,6 +373,112 @@ class Database:
             """
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Analyses (profile + diagnosis) ────────────────────────────────────────
+
+    _ANALYSIS_SUMMARY_COLS = (
+        "name, subject, source, n_games, depth, total_games, total_positions, "
+        "overall_error_rate, n_weaknesses, created_at, diagnosed_at, "
+        "diagnosis_json IS NOT NULL AS has_diagnosis"
+    )
+
+    def save_analysis(self, name: str, profile: dict, subject: str | None = None,
+                      source: str | None = None, depth: int | None = None,
+                      n_games: int | None = None, created_at: str | None = None):
+        """Insert or replace the profile of an analysis run (keeps its diagnosis)."""
+        self._conn.execute(
+            """
+            INSERT INTO analyses (name, subject, source, n_games, depth, total_games,
+                                  total_positions, overall_error_rate, n_weaknesses,
+                                  profile_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+            ON CONFLICT(name) DO UPDATE SET
+                subject = excluded.subject, source = excluded.source,
+                n_games = excluded.n_games, depth = excluded.depth,
+                total_games = excluded.total_games,
+                total_positions = excluded.total_positions,
+                overall_error_rate = excluded.overall_error_rate,
+                n_weaknesses = excluded.n_weaknesses,
+                profile_json = excluded.profile_json
+            """,
+            (
+                name, subject or name, source, n_games, depth,
+                profile.get("total_games"), profile.get("total_positions_analyzed"),
+                profile.get("overall_error_rate"), len(profile.get("weaknesses", [])),
+                json.dumps(profile, ensure_ascii=False), created_at,
+            ),
+        )
+        self._conn.commit()
+
+    def save_diagnosis(self, name: str, diagnosis: dict, diagnosed_at: str | None = None) -> bool:
+        """Attach the AI diagnosis to an existing analysis. Returns False if unknown."""
+        cur = self._conn.execute(
+            "UPDATE analyses SET diagnosis_json = ?, "
+            "diagnosed_at = COALESCE(?, datetime('now')) WHERE name = ?",
+            (json.dumps(diagnosis, ensure_ascii=False), diagnosed_at, name),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_analyses(self) -> list[dict]:
+        """Lightweight summaries of every analysis, most recent first."""
+        rows = self._conn.execute(
+            f"SELECT {self._ANALYSIS_SUMMARY_COLS} FROM analyses "
+            "ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_analysis(self, name: str) -> dict | None:
+        """Full analysis: summary fields + parsed `profile` and `diagnosis` (or None)."""
+        row = self._conn.execute(
+            f"SELECT {self._ANALYSIS_SUMMARY_COLS}, profile_json, diagnosis_json "
+            "FROM analyses WHERE name = ?",
+            (name,),
+        ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["profile"] = json.loads(d.pop("profile_json"))
+        raw = d.pop("diagnosis_json")
+        d["diagnosis"] = json.loads(raw) if raw else None
+        return d
+
+    def delete_analysis(self, name: str):
+        self._conn.execute("DELETE FROM analyses WHERE name = ?", (name,))
+        self._conn.commit()
+
+    # ── Legacy JSON import bookkeeping ────────────────────────────────────────
+
+    def is_legacy_imported(self, name: str) -> bool:
+        return self._conn.execute(
+            "SELECT 1 FROM legacy_imports WHERE name = ?", (name,)
+        ).fetchone() is not None
+
+    def mark_legacy_imported(self, name: str):
+        self._conn.execute(
+            "INSERT OR IGNORE INTO legacy_imports (name) VALUES (?)", (name,)
+        )
+        self._conn.commit()
+
+    # ── Position explanations ("Ask AI") cache ────────────────────────────────
+
+    def get_explanation(self, fen: str, move_played: str | None, concept_key: str,
+                        lang: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT text FROM explanations "
+            "WHERE fen = ? AND move_played = ? AND concept_key = ? AND lang = ?",
+            (fen, move_played or "", concept_key, lang),
+        ).fetchone()
+        return row["text"] if row else None
+
+    def save_explanation(self, fen: str, move_played: str | None, concept_key: str,
+                         lang: str, text: str):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO explanations (fen, move_played, concept_key, lang, text) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (fen, move_played or "", concept_key, lang, text),
+        )
+        self._conn.commit()
 
     # ── Housekeeping ──────────────────────────────────────────────────────────
 

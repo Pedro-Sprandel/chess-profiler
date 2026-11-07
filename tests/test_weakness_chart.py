@@ -21,9 +21,11 @@ def test_error_count_chart_has_data():
 
 
 def test_error_count_chart_sorted_descending():
+    # Horizontal bars: values on x, concept labels on y (largest drawn on top).
     fig = build_error_count_chart(SAMPLE_WEAKNESSES)
-    y_values = list(fig.data[0].y)
-    assert y_values == sorted(y_values, reverse=True)
+    assert fig.data[0].orientation == "h"
+    values = list(fig.data[0].x)
+    assert values == sorted(values, reverse=True)
 
 
 def test_error_magnitude_chart_returns_figure():

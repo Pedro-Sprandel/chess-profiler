@@ -1,11 +1,15 @@
-import os
-import json
-import pandas as pd
+from html import escape
+
 import streamlit as st
+
 from main import run_diagnosis
-from ui.components.diagnosis_card import format_root_cause, format_weakness_table, format_study_priority
+from ui.components.diagnosis_card import format_root_cause, format_study_priority, format_weakness_table
+from ui.concepts import concept_label
 from ui.i18n import t
-from config import OUTPUT_DIR
+from ui.store import get_analysis
+from ui.style import CLASSIFICATION_COLORS, CONFIDENCE_COLORS, SUBTLE, anchor, badge, section_header
+
+_CLASS_ORDER = {"PRIMARY": 0, "SECONDARY": 1, "NOISE": 2}
 
 
 def _run_pending_diagnosis():
@@ -13,7 +17,7 @@ def _run_pending_diagnosis():
 
     Renders a spinner here (the last section), so the user can read/scroll the Profile
     Dashboard and Game Explorer while the API call is in flight. On completion the
-    diagnosis file is written and we rerun to display it.
+    diagnosis is stored in SQLite and we rerun to display it.
     """
     name = st.session_state.get("diagnosis_target")
     with st.spinner(t("diagnosis.running")):
@@ -27,12 +31,93 @@ def _run_pending_diagnosis():
             st.rerun()
 
 
-def render():
-    st.markdown('<a name="diagnosis-report"></a>', unsafe_allow_html=True)
-    st.title(t("diagnosis.title"))
+def _localized(diagnosis_raw: dict) -> dict:
+    """Bilingual format {"en": {...}, "pt": {...}}; legacy files are flat dicts."""
+    lang = st.session_state.get("lang", "pt")
+    if "en" in diagnosis_raw or "pt" in diagnosis_raw:
+        return diagnosis_raw.get(lang) or diagnosis_raw.get("en") or diagnosis_raw.get("pt") or {}
+    return diagnosis_raw
 
-    active_profile = st.session_state.get("active_profile")
-    if not active_profile:
+
+def _render_root_cause(diagnosis: dict):
+    rc = format_root_cause(diagnosis)
+    conf = rc["confidence"] if rc["confidence"] in CONFIDENCE_COLORS else "LOW"
+    conf_badge = badge(
+        f'{t("diagnosis.confidence_label")}: {t("diagnosis.confidence." + conf)}',
+        CONFIDENCE_COLORS[conf],
+    )
+    st.markdown(
+        f"""<div class="cp-card" style="padding:1.25rem 1.4rem">
+              <div class="cp-eyebrow">{t("diagnosis.root_cause")}</div>
+              <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:.2rem 0 .6rem">
+                <span style="font-size:1.35rem;font-weight:650">{escape(rc["name"])}</span>{conf_badge}
+              </div>
+            </div>""",
+        unsafe_allow_html=True,
+    )
+    # Description as Markdown (the model may use emphasis/lists).
+    if rc["description"]:
+        st.markdown(rc["description"])
+
+    st.write("")
+    st.markdown(f"### {t('diagnosis.cognitive')}")
+    pattern = diagnosis.get("cognitive_pattern")
+    if pattern:
+        st.markdown(f'<div class="cp-quote">{escape(pattern)}</div>', unsafe_allow_html=True)
+    else:
+        st.caption(t("diagnosis.no_cognitive"))
+
+
+def _render_classification(diagnosis: dict):
+    st.markdown(f"### {t('diagnosis.weakness_class')}")
+    rows = format_weakness_table(diagnosis)
+    if not rows:
+        st.caption(t("diagnosis.no_weakness"))
+        return
+    rows.sort(key=lambda r: _CLASS_ORDER.get(r["Classification"], 9))
+    for r in rows:
+        cls = r["Classification"]
+        color = CLASSIFICATION_COLORS.get(cls, SUBTLE)
+        cls_label = t(f"diagnosis.class.{cls}") if cls in CLASSIFICATION_COLORS else cls
+        st.markdown(
+            f"""<div class="cp-card" style="border-left:3px solid {color}">
+                  <h4>{escape(concept_label(r["key"]) if r.get("key") else r["Concept"])}
+                    &nbsp;{badge(cls_label, color)}</h4>
+                  <p>{escape(r["Reasoning"])}</p>
+                </div>""",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_study_plan(diagnosis: dict):
+    st.markdown(f"### {t('diagnosis.study_plan')}")
+    items = format_study_priority(diagnosis)
+    if not items:
+        st.caption(t("diagnosis.no_study"))
+        return
+    for item in items:
+        rank = item["rank"] if item["rank"] is not None else "–"
+        name = concept_label(item["key"]) if item.get("key") else item["concept"]
+        ref = t("diagnosis.study_ref", chapter=item["chapter"], page=item["page"])
+        st.markdown(
+            f"""<div class="cp-card" style="display:flex;gap:1rem">
+                  <div style="font-size:1.4rem;font-weight:650;color:{SUBTLE};min-width:2rem">{rank:0>2}</div>
+                  <div>
+                    <h4>{escape(name)}</h4>
+                    <div class="cp-eyebrow" style="margin-bottom:.4rem">{escape(ref)}</div>
+                    <p>{escape(item["reason"])}</p>
+                  </div>
+                </div>""",
+            unsafe_allow_html=True,
+        )
+
+
+def render():
+    anchor("diagnosis-report")
+    section_header(t("diagnosis.eyebrow"), t("diagnosis.title"))
+
+    record = get_analysis(st.session_state.get("active_profile"))
+    if record is None:
         st.info(t("diagnosis.no_files"))
         return
 
@@ -44,94 +129,23 @@ def render():
 
     error = st.session_state.pop("diagnosis_error", None)
     if error:
-        st.error(t("analyze.error.failed", e=error))
+        st.error(t("diagnosis.failed", e=error))
 
-    diagnosis_file = active_profile.replace("_profile.json", "_diagnosis.json")
-    diagnosis_path = os.path.join(OUTPUT_DIR, diagnosis_file)
-    if not os.path.exists(diagnosis_path):
-        st.info(t("diagnosis.no_files"))
+    if not record["diagnosis"]:
+        st.info(t("diagnosis.missing"))
+        busy = st.session_state.get("analysis_running", False)
+        if st.button(t("diagnosis.generate"), type="primary", disabled=busy, key="diagnosis_generate"):
+            st.session_state.diagnosis_running = True
+            st.session_state.diagnosis_target = record["name"]
+            st.rerun()
         return
 
-    with open(diagnosis_path, "r", encoding="utf-8") as f:
-        diagnosis_raw = json.load(f)
+    diagnosis = _localized(record["diagnosis"])
 
-    # Bilingual format: {"en": {...}, "pt": {...}}; old files are flat dicts
-    lang = st.session_state.get("lang", "pt")
-    if "en" in diagnosis_raw or "pt" in diagnosis_raw:
-        diagnosis = diagnosis_raw.get(lang, diagnosis_raw.get("en", {}))
-    else:
-        diagnosis = diagnosis_raw
-
-    # ── Root cause ────────────────────────────────────────────────────────────
-    st.divider()
-    st.subheader(t("diagnosis.root_cause"))
-
-    rc = format_root_cause(diagnosis)
-    confidence = rc["confidence"]
-    label = t("diagnosis.confidence", name=rc["name"], conf=confidence)
-    if confidence == "HIGH":
-        st.success(label)
-    elif confidence == "MEDIUM":
-        st.warning(label)
-    else:
-        st.info(label)
-
-    st.markdown(rc["description"])
-
-    # ── Cognitive pattern ─────────────────────────────────────────────────────
-    st.divider()
-    st.subheader(t("diagnosis.cognitive"))
-
-    cognitive_pattern = diagnosis.get("cognitive_pattern")
-    if cognitive_pattern:
-        st.markdown(f"> {cognitive_pattern}")
-    else:
-        st.info(t("diagnosis.no_cognitive"))
-
-    # ── Weakness classification ───────────────────────────────────────────────
-    st.divider()
-    st.subheader(t("diagnosis.weakness_class"))
-
-    rows = format_weakness_table(diagnosis)
-    if rows:
-        df = pd.DataFrame(rows).rename(columns={
-            "Concept": t("diagnosis.col.concept"),
-            "Classification": t("diagnosis.col.classification"),
-            "Reasoning": t("diagnosis.col.reasoning"),
-        })
-        class_col = t("diagnosis.col.classification")
-
-        def color_classification(val):
-            colors = {
-                "PRIMARY":   "background-color:#c0392b;color:#ffffff;font-weight:700",
-                "SECONDARY": "background-color:#e67e22;color:#ffffff;font-weight:700",
-                "NOISE":     "background-color:#7f8c8d;color:#ffffff;font-weight:700",
-            }
-            return colors.get(val, "")
-
-        st.dataframe(
-            df.style.map(color_classification, subset=[class_col]),
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info(t("diagnosis.no_weakness"))
-
-    # ── Study priority ────────────────────────────────────────────────────────
-    st.divider()
-    st.subheader(t("diagnosis.study_plan"))
-
-    items = format_study_priority(diagnosis)
-    if items:
-        for item in items:
-            st.markdown(t(
-                "diagnosis.study_item",
-                rank=item["rank"],
-                concept=item["concept"],
-                chapter=item["chapter"],
-                page=item["page"],
-            ))
-            st.markdown(f"*{item['reason']}*")
-            st.divider()
-    else:
-        st.info(t("diagnosis.no_study"))
+    col_main, col_side = st.columns([3, 2], gap="large")
+    with col_main:
+        _render_root_cause(diagnosis)
+        st.write("")
+        _render_classification(diagnosis)
+    with col_side:
+        _render_study_plan(diagnosis)

@@ -188,3 +188,33 @@ class TestAnalyzePlayerFromUsername:
             from main import analyze_player_from_username
             analyze_player_from_username("sprandel", n_games=2)
         mock_fetch.assert_called_once_with("sprandel", n_games=2)
+
+
+class TestDatabasePersistence:
+    """The analysis (profile + diagnosis) is stored in SQLite — the UI's source of truth."""
+
+    def _run_username(self, output_dir, **kwargs):
+        mock_game = make_mock_game()
+        with patch("main.fetch_recent_games", return_value=[(mock_game, chess.WHITE)]), \
+             patch("main.batch_validate", return_value=[MOCK_VALIDATION] * 3), \
+             patch("main.diagnose", return_value=MOCK_DIAGNOSIS), \
+             patch("main.OUTPUT_DIR", output_dir):
+            from main import analyze_profile_from_username, run_diagnosis
+            analyze_profile_from_username("sprandel", n_games=2, profile_name="sprandel__d10_x",
+                                          depth=10, **kwargs)
+            run_diagnosis("sprandel__d10_x")
+
+    def test_profile_and_diagnosis_saved_to_db(self, tmp_path):
+        from modules.db import Database
+        self._run_username(str(tmp_path))
+        with Database() as db:
+            rec = db.get_analysis("sprandel__d10_x")
+        assert rec["subject"] == "sprandel"
+        assert rec["source"] == "chess_com"
+        assert rec["depth"] == 10
+        assert rec["total_games"] == 1
+        assert rec["diagnosis"] == MOCK_DIAGNOSIS
+
+    def test_export_json_false_writes_no_files(self, tmp_path):
+        self._run_username(str(tmp_path), export_json=False)
+        assert not any(f.endswith(".json") for f in os.listdir(tmp_path))

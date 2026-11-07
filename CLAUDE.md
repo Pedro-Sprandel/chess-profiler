@@ -29,7 +29,7 @@ Partidas (Chess.com API ou PGN) — primeiros OPENING_MOVES_TO_SKIP lances ignor
     Claude classifica fraquezas em PRIMARY/SECONDARY/NOISE
     e identifica a causa raiz por trás dos sintomas
         ↓
-Perfil JSON + Diagnóstico JSON (bilíngue EN/PT) → Interface Streamlit
+Perfil + Diagnóstico (bilíngue EN/PT) → tabela `analyses` (SQLite) → Interface Streamlit
 ```
 
 **Stack:** Python 3.10+, python-chess, Stockfish (binário local), Anthropic API
@@ -49,7 +49,7 @@ v1/
 ├── .env                            ← ANTHROPIC_API_KEY (não versionado)
 ├── data/
 │   ├── silman_concepts.json        ← base de conhecimento: 18 conceitos (17 estratégicos + missed_tactic)
-│   └── profiler.db                 ← SQLite: cache Stockfish + posições + resultados
+│   └── profiler.db                 ← SQLite: cache Stockfish, posições, resultados, análises, explicações
 ├── modules/
 │   ├── pgn_loader.py               ← carrega partidas de arquivo ou string PGN
 │   ├── chess_com_loader.py         ← busca N partidas recentes via API Chess.com
@@ -58,10 +58,15 @@ v1/
 │   ├── concept_relevance.py        ← filtra posições instrutivas (3 gates causais)
 │   ├── profile_builder.py          ← acumula fraquezas longitudinalmente
 │   ├── ai_diagnostician.py         ← prompt Claude + parse JSON bilíngue estruturado
-│   ├── db.py                       ← camada SQLite (3 tabelas, WAL mode)
+│   ├── db.py                       ← camada SQLite (6 tabelas, WAL mode)
+│   ├── analysis_store.py           ← importa perfis JSON legados de output/ para o SQLite
 │   └── fen_fetcher.py              ← busca FENs do Chess.com com filtros (não integrado ao pipeline)
+├── .streamlit/config.toml          ← tema (paleta sóbria, claro)
 ├── ui/
-│   ├── i18n.py                     ← 107 chaves EN/PT-BR, função t(key, **kwargs)
+│   ├── i18n.py                     ← chaves EN/PT-BR, função t(key, **kwargs)
+│   ├── style.py                    ← paleta, CSS global, helpers (section_header, badge)
+│   ├── store.py                    ← acesso da UI às análises salvas (SQLite)
+│   ├── profiles.py                 ← nome interno único + rótulos legíveis das análises
 │   ├── concepts.py                 ← nomes/categorias de conceitos localizados (lê o JSON)
 │   ├── components/
 │   │   ├── weakness_chart.py       ← barras, radar por categoria e comparação de perfis (Plotly)
@@ -73,7 +78,7 @@ v1/
 │       ├── explorer.py             ← tabuleiro SVG com setas de lance/melhor lance
 │       └── diagnosis.py            ← causa raiz, classificação, plano de estudo
 ├── tests/                          ← 269 testes (ver tabela na seção Testes)
-└── output/                         ← perfis e diagnósticos gerados ({user}_profile.json, etc.)
+└── output/                         ← exportação JSON da CLI ({user}_profile.json, etc.)
 ```
 
 ---
@@ -125,7 +130,7 @@ python eval_fen.py "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 python eval_fen.py "<FEN>" --depth 15 --json
 
 # Testes
-pytest                          # 244 testes, todos passando
+pytest                          # 293 testes, todos passando
 pytest -v --tb=short
 pytest tests/test_position_analyzer.py -v
 pytest tests/test_pipeline_e2e.py -v   # requer Stockfish instalado
@@ -379,13 +384,35 @@ db.insert_analysis_results_bulk(rows)  # rows: list de (pos_id, concept_key, det
 db.get_analysis_results(position_id) -> list
 db.concept_error_summary() -> list    # agrega erros por conceito em todos os resultados
 
+# Análises (fonte única da UI: perfil + diagnóstico)
+db.save_analysis(name, profile, subject, source, depth, n_games, created_at=None)  # upsert, preserva diagnóstico
+db.save_diagnosis(name, diagnosis) -> bool
+db.list_analyses() -> list            # resumos, mais recente primeiro (sem o JSON completo)
+db.get_analysis(name) -> dict | None  # resumo + "profile" + "diagnosis" (parseados)
+db.delete_analysis(name)
+
+# Cache das explicações "Explicar este erro"
+db.get_explanation(fen, move_played, concept_key, lang) / db.save_explanation(...)
+
 db.close()  # ou use como context manager (with Database() as db:)
 ```
+`Database()` resolve o caminho padrão em tempo de chamada (`DEFAULT_DB_PATH`), o que
+permite ao `tests/conftest.py` redirecionar todo teste para um SQLite temporário.
 
 **Schema SQLite:**
 - `fen_cache (fen, depth, score_cp, best_move, analyzed_at)` — PK: (fen, depth)
 - `positions (id, fen, move_number, move_played, player_color, white, black, white_rating, black_rating, opening, eco, game_url, source, imported_at)`
 - `analysis_results (id, position_id→positions, concept_key, detected, details_json, is_error, error_magnitude, analyzed_at)`
+- `analyses (name PK, subject, source, n_games, depth, total_games, total_positions, overall_error_rate, n_weaknesses, profile_json, diagnosis_json, created_at, diagnosed_at)`
+- `explanations (fen, move_played, concept_key, lang, text, created_at)` — PK: (fen, move_played, concept_key, lang)
+- `legacy_imports (name PK, imported_at)` — arquivos de output/ já importados (um perfil
+  excluído na UI não é reimportado)
+
+### `modules/analysis_store.py`
+```python
+import_legacy_outputs(db, output_dir) -> int   # importa *_profile.json (+ diagnóstico) uma vez
+parse_profile_name(name) -> {"subject", "depth", "n_games"}   # "{subject}__d{depth}[_g{n}]_{uid}"
+```
 
 ---
 
@@ -411,8 +438,13 @@ Sequência interna:
    apenas nas posições com pelo menos um conceito detectado
 4. Persiste tudo no SQLite via `_persist_games_to_db()` (com dedupe)
 5. `build_profile()` — aplica `is_instructive()` como gate causal; adiciona
-   `generated_at`; `_build_profile_phase` anexa `metadata` (player/source/depth)
-6. `diagnose()` — chama Claude, retorna diagnóstico bilíngue
+   `generated_at`; `_build_profile_phase` anexa `metadata` (player/source/depth) e
+   grava em `analyses` (`db.save_analysis`)
+6. `diagnose()` — chama Claude, retorna diagnóstico bilíngue, gravado com `db.save_diagnosis`
+
+`export_json=True` (padrão, usado pela CLI) também escreve `output/{name}_profile.json` e
+`output/{name}_diagnosis.json`; a UI passa `export_json=False` — o SQLite é a única
+persistência dela. `run_diagnosis(name)` lê o perfil do banco (fallback: JSON).
 
 `on_progress(stage, current, total, message)` — callback opcional para a UI do Streamlit
 exibir progresso. Stages: `"fetch"`, `"load"`, `"game"`, `"profile"`, `"ai"`, `"done"`.
@@ -437,12 +469,22 @@ app.py
 
 **Scroll-spy:** `components.html(height=0)` injeta script no frame pai que registra
 listener de scroll em `[data-testid="stMain"]`. Listener idempotente via
-`window.parent._spyListener` / `_spyEl`. Aplica `color:#ff4b4b` + `border-left` ao
-link ativo da sidebar.
+`window.parent._spyListener` / `_spyEl`. Alterna a classe `active` no link da sidebar
+(estilo em `ui/style.py`).
 
-**Perfil ativo** (`st.session_state.active_profile`): string com o nome do arquivo
-`{user}_profile.json` em `output/`. Todas as páginas lêem desse estado. O seletor
-na sidebar sincroniza automaticamente.
+**Visual:** tema em `.streamlit/config.toml` + CSS em `ui/style.py` (paleta neutra com
+um acento azul-ardósia, vermelho-tijolo para erros, verde para melhor lance; sem emojis).
+Seções usam `section_header(eyebrow, title, subtitle)`; gráficos Plotly compartilham
+`_style()` em `weakness_chart.py` (barras horizontais ordenadas).
+
+**Análise ativa** (`st.session_state.active_profile`): o `name` (chave interna única)
+de uma linha da tabela `analyses`. Padrão: a análise mais recente; valores legados
+`{name}_profile.json` são normalizados. O seletor da sidebar (`profile_widget`) espelha
+esse estado: mudanças programáticas (nova análise, linha escolhida no histórico) são
+empurradas para o widget antes de desenhá-lo; mudanças do usuário voltam via `on_change`.
+Rótulos exibidos: `jogador · data · N partidas · prof. D` (`ui/profiles.analysis_label`).
+Na primeira execução da sessão, `ui/store.ensure_legacy_imported()` migra os JSON de
+`output/` para o banco.
 
 **i18n (`ui/i18n.py`):**
 ```python
@@ -462,13 +504,16 @@ Toda a UI (tabela, gráficos, explorer) usa `concept_label()` em vez de
 `detection_key.title()`.
 
 **Melhorias da UI:**
+- Analyze: formulário + tabela "Análises salvas" (clique numa linha abre a análise).
 - Explorer: lances em SAN (`board.san`), número do lance, avaliação antes→depois,
-  data e oponente no título do expander, link para a partida no Chess.com
-  (`game_url`), cache do "Ask AI" por FEN+idioma.
+  oponente no título do expander, link para a partida no Chess.com (`game_url`);
+  "Explicar este erro" fica salvo na tabela `explanations` (sobrevive a recarregar).
+- Diagnosis: cartões de causa raiz/classificação/plano; se a análise não tem
+  diagnóstico (ex.: falha da API), botão "Gerar diagnóstico".
 - Profile Dashboard: caption com `generated_at`/fonte/profundidade, radar Plotly
   de erros por categoria Silman (`build_category_radar`) e comparação de perfis
   lado a lado (`build_comparison_chart`, multiselect de 2+ perfis).
-- Analyze: upload de PGN via `tempfile.NamedTemporaryFile` (sem colisão de nomes).
+- Analyze: upload de PGN via `tempfile.NamedTemporaryFile` (removido após a análise).
 
 ---
 
@@ -515,7 +560,7 @@ Conceito tático derivado (atribuído por gate de precedência, não por detecto
 ## Testes
 
 ```bash
-pytest                                  # 269 testes, todos passando
+pytest                                  # 293 testes, todos passando
 pytest -v --tb=short
 pytest tests/test_position_analyzer.py  # 78 testes com FENs conhecidas
 pytest tests/test_pipeline_e2e.py -v    # integração real (requer Stockfish)
@@ -530,13 +575,14 @@ Cobertura por arquivo:
 | `test_stockfish_validator.py` | 23 | Mock `popen_uci`, cache, guards ΔWinP, passada de confirmação/MultiPV |
 | `test_concept_relevance.py` | 20 | Gates causais, scoring, `is_missed_tactic`/`is_converted_tactic` via SEE |
 | `test_chess_com_loader.py` | 16 | Mock HTTP, detecção de cor, limite n_games |
-| `test_app.py` | 15 | AppTest: startup, i18n, estado vazio, fixture com perfil |
+| `test_app.py` | 21 | AppTest: startup, i18n, estado vazio, análise no SQLite, exclusão, diagnóstico ausente |
 | `test_ai_diagnostician.py` | 14 | Mock cliente Anthropic, formato bilíngue EN/PT |
 | `test_pipeline_e2e.py` | 13 | Integração real Stockfish; `@skip_no_sf` se binário ausente |
-| `test_db.py` | 12 | Cache, posições, `find_position`, resultados de análise |
+| `test_db.py` | 20 | Cache, posições, `find_position`, resultados, análises, explicações |
+| `test_analysis_store.py` | 8 | Importação de JSON legados (idempotente, não reimporta excluídos) |
 | `test_pgn_loader.py` | 11 | Parsing PGN, iteração de posições |
 | `test_cli.py` | 11 | `_main(argv=...)`, roteamento pgn vs username, flags |
-| `test_main.py` | 10 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games` |
+| `test_main.py` | 12 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games` |
 | `test_diagnosis_card.py` | 6 | `format_root_cause`, `format_weakness_table`, `format_study_priority` |
 | `test_weakness_chart.py` | 6 | Figuras Plotly, ordenação, lista vazia |
 | `test_config.py` | 4 | Valores e tipos dos thresholds |

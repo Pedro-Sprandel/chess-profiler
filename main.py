@@ -149,9 +149,11 @@ def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKF
 
 
 def _build_profile_phase(games_data: list, name: str, source: str, on_progress=None,
-                         depth: int = STOCKFISH_DEPTH) -> dict:
+                         depth: int = STOCKFISH_DEPTH, subject: str | None = None,
+                         n_games: int | None = None, export_json: bool = True) -> dict:
     """
-    Persiste no SQLite, constrói o perfil de fraquezas e salva
+    Persiste no SQLite, constrói o perfil de fraquezas e o grava na tabela
+    `analyses` (fonte única da UI). Com export_json=True (CLI) também exporta
     output/{name}_profile.json. Não roda o diagnóstico da IA.
 
     Esta é a fase "rápida" (local): tudo que a UI precisa para exibir o painel de
@@ -167,11 +169,15 @@ def _build_profile_phase(games_data: list, name: str, source: str, on_progress=N
     _emit(on_progress, "profile", 0, 1, "[main] Building weakness profile...")
     profile = build_profile(games_data)
     profile["metadata"] = {
-        "player": name,
+        "player": subject or name,
         "source": source,
         "depth": depth,
     }
-    save_profile(profile, f"{OUTPUT_DIR}/{name}_profile.json")
+    with Database() as db:
+        db.save_analysis(name, profile, subject=subject or name, source=source,
+                         depth=depth, n_games=n_games)
+    if export_json:
+        save_profile(profile, f"{OUTPUT_DIR}/{name}_profile.json")
 
     print(f"\n[main] Resumo do perfil:")
     print(f"  Partidas analisadas: {profile['total_games']}")
@@ -184,15 +190,19 @@ def _build_profile_phase(games_data: list, name: str, source: str, on_progress=N
     return profile
 
 
-def _diagnose_and_save(profile: dict, name: str, on_progress=None) -> dict:
-    """Roda o diagnóstico da IA sobre um perfil e salva output/{name}_diagnosis.json."""
+def _diagnose_and_save(profile: dict, name: str, on_progress=None,
+                       export_json: bool = True) -> dict:
+    """Roda o diagnóstico da IA, grava em `analyses` e (CLI) em output/{name}_diagnosis.json."""
     _emit(on_progress, "ai", 0, 1, "[main] Running AI diagnosis...")
     silman_concepts = load_silman_concepts()
     diagnosis = diagnose(profile, silman_concepts)
 
-    diagnosis_path = f"{OUTPUT_DIR}/{name}_diagnosis.json"
-    with open(diagnosis_path, "w", encoding="utf-8") as f:
-        json.dump(diagnosis, f, indent=2, ensure_ascii=False)
+    with Database() as db:
+        db.save_diagnosis(name, diagnosis)
+    if export_json:
+        diagnosis_path = f"{OUTPUT_DIR}/{name}_diagnosis.json"
+        with open(diagnosis_path, "w", encoding="utf-8") as f:
+            json.dump(diagnosis, f, indent=2, ensure_ascii=False)
 
     # Console summary only — best-effort. The diagnosis is already persisted above,
     # so a missing/odd field here must never abort the pipeline.
@@ -206,22 +216,31 @@ def _diagnose_and_save(profile: dict, name: str, on_progress=None) -> dict:
     return diagnosis
 
 
-def run_diagnosis(name: str, on_progress=None) -> dict:
+def run_diagnosis(name: str, on_progress=None, export_json: bool = False) -> dict:
     """
-    Carrega output/{name}_profile.json e roda apenas o diagnóstico da IA.
+    Carrega o perfil `name` do SQLite e roda apenas o diagnóstico da IA.
 
     Usado pela UI para a segunda fase (progressiva): o perfil já foi construído e
-    exibido; esta chamada cobre só a espera pela API da Anthropic.
+    exibido; esta chamada cobre só a espera pela API da Anthropic. Cai para
+    output/{name}_profile.json se o perfil não estiver no banco.
     """
-    profile = load_profile(f"{OUTPUT_DIR}/{name}_profile.json")
-    return _diagnose_and_save(profile, name, on_progress)
+    with Database() as db:
+        record = db.get_analysis(name)
+    if record is not None:
+        profile = record["profile"]
+    else:
+        profile = load_profile(f"{OUTPUT_DIR}/{name}_profile.json")
+    return _diagnose_and_save(profile, name, on_progress, export_json=export_json)
 
 
 def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.WHITE,
-                    on_progress=None, depth: int = STOCKFISH_DEPTH) -> dict:
+                    on_progress=None, depth: int = STOCKFISH_DEPTH,
+                    subject: str | None = None, export_json: bool = True) -> dict:
     """
     Constrói (e salva) apenas o perfil de fraquezas a partir de um arquivo PGN,
     sem rodar o diagnóstico da IA. Retorna o profile_dict.
+
+    player_name: chave única da análise; subject: nome exibido (default: player_name).
     """
     print(f"\n=== Iniciando análise de {player_name} (depth {depth}) ===\n")
 
@@ -231,12 +250,15 @@ def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.
 
     game_color_pairs = [(game, player_color) for game in games]
     games_data = _process_games(game_color_pairs, on_progress, depth=depth)
-    return _build_profile_phase(games_data, player_name, "pgn", on_progress, depth=depth)
+    return _build_profile_phase(games_data, player_name, "pgn", on_progress, depth=depth,
+                                subject=subject, n_games=len(games),
+                                export_json=export_json)
 
 
 def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=None,
                                   profile_name: str | None = None,
-                                  depth: int = STOCKFISH_DEPTH) -> dict:
+                                  depth: int = STOCKFISH_DEPTH,
+                                  export_json: bool = True) -> dict:
     """
     Constrói (e salva) apenas o perfil de fraquezas a partir de um username do
     Chess.com, sem rodar o diagnóstico da IA. Retorna o profile_dict.
@@ -253,7 +275,8 @@ def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=
 
     games_data = _process_games(game_color_pairs, on_progress, depth=depth)
     return _build_profile_phase(games_data, profile_name or username, "chess_com",
-                                on_progress, depth=depth)
+                                on_progress, depth=depth, subject=username,
+                                n_games=len(game_color_pairs), export_json=export_json)
 
 
 def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.WHITE,

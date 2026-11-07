@@ -1,16 +1,26 @@
 import hmac
-import os
+
 import streamlit as st
 import streamlit.components.v1 as components
 
-from config import APP_PASSWORD, OUTPUT_DIR
-from ui.profiles import display_label
+from config import APP_PASSWORD
 
 st.set_page_config(
-    page_title="Chess Strategic Profiler",
+    page_title="Chess Profiler",
     page_icon="♟",
     layout="wide",
 )
+
+from ui.i18n import t
+from ui.profiles import analysis_label
+from ui.store import delete_analysis, ensure_legacy_imported, list_analyses, normalize_name
+from ui.style import inject_css
+
+inject_css()
+
+# ── Session state defaults ────────────────────────────────────────────────────
+if "lang" not in st.session_state:
+    st.session_state.lang = "pt"
 
 
 def _check_password() -> bool:
@@ -25,101 +35,108 @@ def _check_password() -> bool:
     if st.session_state.get("_authenticated"):
         return True
 
-    st.title("🔒 Chess Strategic Profiler")
-    entered = st.text_input("Password", type="password", key="_password_input")
-    if entered:
-        if hmac.compare_digest(entered, APP_PASSWORD):
-            st.session_state["_authenticated"] = True
-            del st.session_state["_password_input"]
-            st.rerun()
-        else:
-            st.error("Incorrect password.")
+    _, col, _ = st.columns([1, 1.2, 1])
+    with col:
+        st.markdown(f'<div class="cp-title" style="margin:4rem 0 1.5rem">{t("auth.title")}</div>',
+                    unsafe_allow_html=True)
+        entered = st.text_input(t("auth.password"), type="password", key="_password_input")
+        if entered:
+            if hmac.compare_digest(entered, APP_PASSWORD):
+                st.session_state["_authenticated"] = True
+                del st.session_state["_password_input"]
+                st.rerun()
+            else:
+                st.error(t("auth.wrong"))
     return False
 
 
 if not _check_password():
     st.stop()
 
-# ── Session state defaults ────────────────────────────────────────────────────
-if "lang" not in st.session_state:
-    st.session_state.lang = "pt"
+# ── Saved analyses (SQLite is the single source of truth) ─────────────────────
+ensure_legacy_imported()
+analyses = list_analyses()
+summaries = {a["name"]: a for a in analyses}
 
-if "active_profile" not in st.session_state:
-    profile_files = sorted(
-        f for f in os.listdir(OUTPUT_DIR) if f.endswith("_profile.json")
-    ) if os.path.isdir(OUTPUT_DIR) else []
-    st.session_state.active_profile = profile_files[0] if profile_files else None
-
-from ui.i18n import t
+# Default to the most recent analysis; drop a selection that no longer exists.
+active = normalize_name(st.session_state.get("active_profile"))
+if "active_profile" not in st.session_state or (active and active not in summaries):
+    active = analyses[0]["name"] if analyses else None
+st.session_state.active_profile = active
 
 _busy = st.session_state.get("analysis_running", False) or st.session_state.get("diagnosis_running", False)
 
+
+def _on_profile_change():
+    st.session_state.active_profile = st.session_state.profile_widget
+
+
 with st.sidebar:
-    st.title(t("nav.title"))
-
-    # ── Language selector ─────────────────────────────────────────────────────
-    # Disabled while an analysis is running: switching widgets mid-run triggers a
-    # rerun that would interrupt the in-flight pipeline.
-    st.radio(
-        t("lang.label"),
-        options=["en", "pt"],
-        format_func=lambda x: "🇺🇸 English" if x == "en" else "🇧🇷 Português",
-        horizontal=True,
-        key="lang",
-        disabled=_busy,
+    st.markdown(
+        f'<div class="cp-brand">{t("nav.title")}</div><div class="cp-brand-sub">{t("nav.subtitle")}</div>',
+        unsafe_allow_html=True,
     )
+    st.write("")
 
-    st.divider()
-
-    # ── Shared profile selector ───────────────────────────────────────────────
-    profile_files = sorted(
-        f for f in os.listdir(OUTPUT_DIR) if f.endswith("_profile.json")
-    ) if os.path.isdir(OUTPUT_DIR) else []
-
-    if profile_files:
-        current = st.session_state.active_profile
-        idx = profile_files.index(current) if current in profile_files else 0
-        chosen = st.selectbox(
+    # ── Analysis selector ─────────────────────────────────────────────────────
+    # The widget mirrors active_profile: programmatic changes (a new analysis, a
+    # row picked in the history table) are pushed into the widget before it is
+    # drawn, and user changes flow back through the on_change callback.
+    if analyses:
+        if st.session_state.get("profile_widget") != active:
+            st.session_state.profile_widget = active
+        st.selectbox(
             t("sidebar.profile"),
-            profile_files,
-            index=idx,
+            list(summaries),
             key="profile_widget",
+            on_change=_on_profile_change,
             disabled=_busy,
-            format_func=display_label,
+            format_func=lambda n: analysis_label(summaries[n]),
         )
-        # Sync manual sidebar selection back to active_profile
-        st.session_state.active_profile = chosen
 
-        # ── Delete profile ────────────────────────────────────────────────────
-        with st.expander(t("sidebar.delete")):
-            st.warning(t("sidebar.delete_warn", name=display_label(chosen)))
-            if st.button(t("sidebar.delete_confirm"), type="primary", use_container_width=True, disabled=_busy):
-                base = chosen[: -len("_profile.json")]
-                for suffix in ("_profile.json", "_diagnosis.json"):
-                    fpath = os.path.join(OUTPUT_DIR, base + suffix)
-                    if os.path.exists(fpath):
-                        os.remove(fpath)
-                st.session_state.active_profile = None
+        with st.popover(t("sidebar.delete"), use_container_width=True, disabled=_busy):
+            label = analysis_label(summaries[active])
+            st.markdown(t("sidebar.delete_warn", name=label))
+            if st.button(t("sidebar.delete_confirm"), type="primary", use_container_width=True,
+                         key="delete_confirm"):
+                delete_analysis(active)
+                st.session_state.pop("active_profile", None)
                 st.session_state.pop("profile_widget", None)
-                st.toast(t("sidebar.deleted", name=display_label(chosen)))
+                st.toast(t("sidebar.deleted", name=label))
                 st.rerun()
     else:
         st.caption(t("sidebar.no_profiles"))
 
-    st.divider()
+    st.write("")
 
     # ── Navigation ────────────────────────────────────────────────────────────
     st.markdown(
         f"""
+        <div class="cp-eyebrow" style="margin-bottom:.4rem">{t("nav.sections")}</div>
         <nav id="section-nav">
-        <a href="#home"              class="nav-link" style="display:block;padding:6px 0 6px 12px;text-decoration:none;color:white;border-left:3px solid transparent;transition:all 0.15s">{t("nav.home")}</a>
-        <a href="#analyze"           class="nav-link" style="display:block;padding:6px 0 6px 12px;text-decoration:none;color:white;border-left:3px solid transparent;transition:all 0.15s">{t("nav.analyze")}</a>
-        <a href="#profile-dashboard" class="nav-link" style="display:block;padding:6px 0 6px 12px;text-decoration:none;color:white;border-left:3px solid transparent;transition:all 0.15s">{t("nav.profile")}</a>
-        <a href="#game-explorer"     class="nav-link" style="display:block;padding:6px 0 6px 12px;text-decoration:none;color:white;border-left:3px solid transparent;transition:all 0.15s">{t("nav.explorer")}</a>
-        <a href="#diagnosis-report"  class="nav-link" style="display:block;padding:6px 0 6px 12px;text-decoration:none;color:white;border-left:3px solid transparent;transition:all 0.15s">{t("nav.diagnosis")}</a>
+          <a href="#home"              class="nav-link">{t("nav.home")}</a>
+          <a href="#analyze"           class="nav-link">{t("nav.analyze")}</a>
+          <a href="#profile-dashboard" class="nav-link">{t("nav.profile")}</a>
+          <a href="#game-explorer"     class="nav-link">{t("nav.explorer")}</a>
+          <a href="#diagnosis-report"  class="nav-link">{t("nav.diagnosis")}</a>
         </nav>
         """,
         unsafe_allow_html=True,
+    )
+
+    st.write("")
+    st.write("")
+
+    # ── Language ──────────────────────────────────────────────────────────────
+    # Disabled while an analysis is running: switching widgets mid-run triggers a
+    # rerun that would interrupt the in-flight pipeline.
+    st.radio(
+        t("lang.label"),
+        options=["pt", "en"],
+        format_func=lambda x: "Português" if x == "pt" else "English",
+        horizontal=True,
+        key="lang",
+        disabled=_busy,
     )
 
 from ui.pages.home import render as render_home
@@ -172,11 +189,7 @@ components.html(
                 var activeId = getActiveId();
                 navLinks.forEach(function (link) {
                     var id = (link.getAttribute('href') || '').slice(1);
-                    var on = id === activeId;
-                    link.style.fontWeight   = on ? '700'                : '400';
-                    link.style.color        = on ? '#ff4b4b'            : 'white';
-                    link.style.borderLeft   = on ? '3px solid #ff4b4b' : '3px solid transparent';
-                    link.style.paddingLeft  = on ? '9px'                : '12px';
+                    link.classList.toggle('active', id === activeId);
                 });
             }
 
