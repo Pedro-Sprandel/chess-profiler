@@ -12,12 +12,12 @@ from ui.store import get_analysis, get_explanation, save_explanation
 from ui.style import ERROR, GOOD, INK, MUTED, anchor, section_header, swatch
 
 BOARD_COLORS = {
-    "square light": "#DEE3E6",
-    "square dark": "#8CA2AD",
-    "square light lastmove": "#C3D0D6",
-    "square dark lastmove": "#7891A0",
-    "margin": "#FFFFFF",
-    "coord": "#5F6B7A",
+    "square light": "#C9D2D9",
+    "square dark": "#6F8797",
+    "square light lastmove": "#B3C1CB",
+    "square dark lastmove": "#5F7787",
+    "margin": "#00000000",
+    "coord": "#9AA4B2",
 }
 
 
