@@ -1,6 +1,6 @@
 """
 analysis_store.py — migração dos perfis/diagnósticos antigos (arquivos JSON em
-output/) para a tabela `analyses` do SQLite.
+output/) para a tabela `analyses` (modules/app_store.py: SQLite ou Postgres).
 
 Até aqui a UI listava `output/*_profile.json` e emparelhava cada arquivo com um
 `*_diagnosis.json` pelo nome. Agora o SQLite é a fonte única: esta função importa
@@ -12,7 +12,7 @@ import json
 import os
 from datetime import datetime, timezone
 
-from modules.db import Database
+from modules.app_store import AppStore
 
 PROFILE_SUFFIX = "_profile.json"
 DIAGNOSIS_SUFFIX = "_diagnosis.json"
@@ -51,10 +51,12 @@ def _created_at(profile: dict, path: str) -> str:
     return mtime.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def import_legacy_outputs(db: Database, output_dir: str) -> int:
-    """Importa para o SQLite os `*_profile.json` (+ diagnóstico) ainda não importados.
+def import_legacy_outputs(db: AppStore, output_dir: str, owner_id: int | None = None) -> int:
+    """Importa para o banco os `*_profile.json` (+ diagnóstico) ainda não importados.
 
-    Idempotente; arquivos ilegíveis são ignorados. Retorna quantos foram importados.
+    owner_id: dono das análises importadas (None = sem dono; a conta administradora
+    as assume em claim_orphan_analyses). Idempotente; arquivos ilegíveis são
+    ignorados. Retorna quantos foram importados.
     """
     if not output_dir or not os.path.isdir(output_dir):
         return 0
@@ -87,6 +89,7 @@ def import_legacy_outputs(db: Database, output_dir: str) -> int:
             depth=meta.get("depth") or parsed["depth"],
             n_games=parsed["n_games"],
             created_at=_created_at(profile, path),
+            owner_id=owner_id,
         )
 
         diag_path = os.path.join(output_dir, name + DIAGNOSIS_SUFFIX)

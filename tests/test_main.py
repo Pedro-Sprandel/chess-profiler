@@ -205,10 +205,10 @@ class TestDatabasePersistence:
             run_diagnosis("sprandel__d10_x")
 
     def test_profile_and_diagnosis_saved_to_db(self, tmp_path):
-        from modules.db import Database
+        from modules.app_store import AppStore
         self._run_username(str(tmp_path))
-        with Database() as db:
-            rec = db.get_analysis("sprandel__d10_x")
+        with AppStore() as store:
+            rec = store.get_analysis("sprandel__d10_x")
         assert rec["subject"] == "sprandel"
         assert rec["source"] == "chess_com"
         assert rec["depth"] == 10
@@ -218,3 +218,12 @@ class TestDatabasePersistence:
     def test_export_json_false_writes_no_files(self, tmp_path):
         self._run_username(str(tmp_path), export_json=False)
         assert not any(f.endswith(".json") for f in os.listdir(tmp_path))
+
+    def test_owner_id_is_recorded(self, tmp_path):
+        from modules.app_store import AppStore
+        with AppStore() as store:
+            owner = store.create_user("ana", "correct-horse")
+        self._run_username(str(tmp_path), export_json=False, owner_id=owner["id"])
+        with AppStore() as store:
+            assert store.get_analysis("sprandel__d10_x", owner_id=owner["id"]) is not None
+            assert store.get_analysis("sprandel__d10_x", owner_id=owner["id"] + 1) is None

@@ -7,6 +7,7 @@ import streamlit as st
 
 from config import STOCKFISH_DEPTH
 from main import analyze_profile, analyze_profile_from_username
+from ui.auth import current_user_id
 from ui.i18n import t
 from ui.profiles import format_date, make_profile_name
 from ui.store import list_analyses
@@ -61,6 +62,7 @@ def _execute_pending():
     try:
         depth = req.get("depth", STOCKFISH_DEPTH)
         name = req["profile_name"]
+        owner_id = current_user_id()
         if req["kind"] == "chesscom":
             profile = _run_with_progress(
                 analyze_profile_from_username,
@@ -69,6 +71,7 @@ def _execute_pending():
                 profile_name=name,
                 depth=depth,
                 export_json=False,
+                owner_id=owner_id,
             )
         else:
             try:
@@ -80,6 +83,7 @@ def _execute_pending():
                     depth=depth,
                     subject=req["subject"],
                     export_json=False,
+                    owner_id=owner_id,
                 )
             finally:
                 if os.path.exists(req["pgn_path"]):

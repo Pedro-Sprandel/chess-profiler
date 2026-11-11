@@ -5,10 +5,30 @@ services:
       - "8501:8501"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      APP_PASSWORD: ${APP_PASSWORD}
+      # Accounts, login sessions and analyses live in Postgres (survives rebuilds).
+      DATABASE_URL: postgresql://chess:chess@db:5432/chess_profiler
+      SIGNUP_CODE: ${SIGNUP_CODE:-}
       DATA_DIR: /data
     volumes:
-      - chess_data:/data
+      - chess_data:/data   # Stockfish eval cache (regenerable)
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: chess
+      POSTGRES_PASSWORD: chess
+      POSTGRES_DB: chess_profiler
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chess -d chess_profiler"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   chess_data:
+  pg_data:

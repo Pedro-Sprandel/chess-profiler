@@ -29,9 +29,25 @@ else:
     DB_PATH = None  # modules/db.py usa seu default relativo ao módulo
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Senha compartilhada para o gate de acesso (deploy privado). Sem ela, sem gate
-# (uso local). Defina APP_PASSWORD no ambiente do servidor.
-APP_PASSWORD = os.getenv("APP_PASSWORD")
+# Banco durável dos dados de usuário (contas, sessões de login, análises). Com uma
+# URL Postgres (ex.: Neon/Supabase/Render: postgresql://user:pass@host/db?sslmode=require)
+# os dados vivem fora do container e sobrevivem a redeploys. Sem ela, usa o SQLite local
+# (data/profiler.db ou DATA_DIR/profiler.db). Ver modules/app_store.py.
+DATABASE_URL = os.getenv("DATABASE_URL") or None
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
+
+# ── Login ─────────────────────────────────────────────────────────────────────
+# Duração de uma sessão de login (cookie no navegador), em dias.
+SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "30"))
+
+# Cadastro de novas contas pela interface. ALLOW_SIGNUP=0 fecha o cadastro (contas
+# passam a ser criadas só via `python manage.py create-user`).
+ALLOW_SIGNUP = os.getenv("ALLOW_SIGNUP", "1").strip().lower() not in ("0", "false", "no", "off")
+
+# Código de convite exigido para criar conta (deploy público: a chave da Anthropic
+# custa dinheiro). APP_PASSWORD, a antiga senha compartilhada, vale como fallback.
+# Sem nenhum dos dois, o cadastro é aberto (uso local).
+SIGNUP_CODE = os.getenv("SIGNUP_CODE") or os.getenv("APP_PASSWORD") or None
 
 # Profundidade de análise do Stockfish (maior = mais preciso, mais lento)
 # 10 é suficiente para detectar erros estratégicos; aumente para 15+ se quiser mais precisão

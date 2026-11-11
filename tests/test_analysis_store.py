@@ -4,7 +4,7 @@ import json
 import pytest
 
 from modules.analysis_store import import_legacy_outputs, parse_profile_name
-from modules.db import Database
+from modules.app_store import AppStore
 
 PROFILE = {"generated_at": "2026-05-13 18:20 UTC", "total_games": 30,
            "total_positions_analyzed": 900, "overall_error_rate": 0.25,
@@ -13,10 +13,8 @@ PROFILE = {"generated_at": "2026-05-13 18:20 UTC", "total_games": 30,
 
 
 @pytest.fixture
-def db(tmp_path):
-    d = Database(tmp_path / "t.db")
-    yield d
-    d.close()
+def db(store):
+    return store
 
 
 def _write(dirpath, name, diagnosis=None):
@@ -66,3 +64,9 @@ class TestImportLegacy:
 
     def test_missing_dir(self, db, tmp_path):
         assert import_legacy_outputs(db, str(tmp_path / "nope")) == 0
+
+    def test_owner_can_be_assigned(self, db, tmp_path):
+        owner = db.create_user("ana", "correct-horse")
+        _write(tmp_path, "bob")
+        import_legacy_outputs(db, str(tmp_path), owner_id=owner["id"])
+        assert [a["name"] for a in db.list_analyses(owner_id=owner["id"])] == ["bob"]
