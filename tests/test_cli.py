@@ -124,3 +124,24 @@ class TestMainUsernameMode:
         with pytest.raises(SystemExit):
             from main import _main
             _main([])
+
+
+class TestOwnerFlag:
+    def test_owner_resolves_account_id(self, store):
+        user = store.create_user("ana", "correct-horse")
+        with patch("main.analyze_player_from_username", return_value=(MOCK_PROFILE, MOCK_DIAGNOSIS)) as mock_un:
+            from main import _main
+            _main(["--user", "bob", "--owner", "ana"])
+        assert mock_un.call_args.kwargs["owner_id"] == user["id"]
+
+    def test_without_owner_analysis_has_no_owner(self):
+        with patch("main.analyze_player_from_username", return_value=(MOCK_PROFILE, MOCK_DIAGNOSIS)) as mock_un:
+            from main import _main
+            _main(["--user", "bob"])
+        assert mock_un.call_args.kwargs["owner_id"] is None
+
+    def test_unknown_owner_exits(self):
+        with patch("main.analyze_player_from_username") as mock_un, pytest.raises(SystemExit):
+            from main import _main
+            _main(["--user", "bob", "--owner", "ghost"])
+        mock_un.assert_not_called()

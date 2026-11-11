@@ -34,6 +34,7 @@ pip install -r requirements.txt
 # Configure as credenciais
 cp .env.example .env
 # edite .env e preencha ANTHROPIC_API_KEY=sk-ant-...
+# (opcional) DATABASE_URL=postgresql://... para guardar contas e análises no Postgres
 
 # Ajuste STOCKFISH_PATH em config.py para o caminho do seu binário
 ```
@@ -54,10 +55,25 @@ python main.py --user sprandel --pgn partidas.pgn --color white
 python eval_fen.py "<FEN>" --depth 15 --json
 ```
 
-Cada análise (perfil + diagnóstico) fica salva no SQLite (`data/profiler.db`, tabela
-`analyses`) e aparece no seletor da barra lateral. A CLI também exporta
-`output/{user}_profile.json` e `output/{user}_diagnosis.json`; arquivos antigos em
-`output/` são importados automaticamente pela interface.
+### Login e persistência
+
+A interface exige login: cada pessoa cria uma conta (usuário + senha) e vê só as
+próprias análises. O login fica lembrado no navegador (cookie, 30 dias por padrão).
+A primeira conta criada vira administradora e recebe as análises salvas antes do login.
+
+Contas, sessões e análises (perfil + diagnóstico) ficam no banco definido por
+`DATABASE_URL` (PostgreSQL — dados persistentes de verdade, fora do servidor) ou, sem
+ela, no SQLite local `data/profiler.db`. Para o deploy, ver [DEPLOY.md](DEPLOY.md).
+
+```bash
+python manage.py create-user ana          # cria conta pela linha de comando
+python manage.py set-password ana         # redefine senha
+python manage.py import-sqlite data/profiler.db --owner ana   # SQLite → Postgres
+```
+
+A CLI (`main.py`) também grava a análise no banco (`--owner ana` atribui a uma conta) e
+exporta `output/{user}_profile.json` e `output/{user}_diagnosis.json`; arquivos antigos
+em `output/` são importados automaticamente pela interface.
 
 ## Testes
 
@@ -73,7 +89,8 @@ pytest tests/test_pipeline_e2e.py -v  # integração real (requer Stockfish inst
 |---------|-----------|
 | `main.py` | Pipeline CLI |
 | `app.py` + `ui/` | Interface Streamlit (página única) |
-| `config.py` | Caminhos, chaves e thresholds |
+| `config.py` | Caminhos, chaves, banco, login e thresholds |
+| `manage.py` | Administração de contas e migração SQLite → Postgres |
 | `modules/` | Detecção, validação, diagnóstico, persistência |
 | `data/silman_concepts.json` | Base de conhecimento (17 conceitos) |
 | `tests/` | Suíte de testes |

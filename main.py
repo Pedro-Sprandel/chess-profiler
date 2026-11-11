@@ -8,6 +8,7 @@ from modules.position_analyzer import detect_concepts
 from modules.stockfish_validator import batch_validate, open_engine
 from modules.profile_builder import build_profile, save_profile, load_profile
 from modules.ai_diagnostician import diagnose, load_silman_concepts
+from modules.app_store import AppStore
 from modules.db import Database
 from config import OUTPUT_DIR, STOCKFISH_DEPTH, OPENING_MOVES_TO_SKIP
 
@@ -150,10 +151,12 @@ def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKF
 
 def _build_profile_phase(games_data: list, name: str, source: str, on_progress=None,
                          depth: int = STOCKFISH_DEPTH, subject: str | None = None,
-                         n_games: int | None = None, export_json: bool = True) -> dict:
+                         n_games: int | None = None, export_json: bool = True,
+                         owner_id: int | None = None) -> dict:
     """
-    Persiste no SQLite, constrói o perfil de fraquezas e o grava na tabela
-    `analyses` (fonte única da UI). Com export_json=True (CLI) também exporta
+    Persiste as posições no SQLite local, constrói o perfil de fraquezas e o grava
+    na tabela `analyses` do AppStore (fonte única da UI; Postgres no deploy), com
+    `owner_id` como dono. Com export_json=True (CLI) também exporta
     output/{name}_profile.json. Não roda o diagnóstico da IA.
 
     Esta é a fase "rápida" (local): tudo que a UI precisa para exibir o painel de
@@ -173,9 +176,9 @@ def _build_profile_phase(games_data: list, name: str, source: str, on_progress=N
         "source": source,
         "depth": depth,
     }
-    with Database() as db:
-        db.save_analysis(name, profile, subject=subject or name, source=source,
-                         depth=depth, n_games=n_games)
+    with AppStore() as store:
+        store.save_analysis(name, profile, subject=subject or name, source=source,
+                            depth=depth, n_games=n_games, owner_id=owner_id)
     if export_json:
         save_profile(profile, f"{OUTPUT_DIR}/{name}_profile.json")
 
@@ -197,8 +200,8 @@ def _diagnose_and_save(profile: dict, name: str, on_progress=None,
     silman_concepts = load_silman_concepts()
     diagnosis = diagnose(profile, silman_concepts)
 
-    with Database() as db:
-        db.save_diagnosis(name, diagnosis)
+    with AppStore() as store:
+        store.save_diagnosis(name, diagnosis)
     if export_json:
         diagnosis_path = f"{OUTPUT_DIR}/{name}_diagnosis.json"
         with open(diagnosis_path, "w", encoding="utf-8") as f:
@@ -218,14 +221,14 @@ def _diagnose_and_save(profile: dict, name: str, on_progress=None,
 
 def run_diagnosis(name: str, on_progress=None, export_json: bool = False) -> dict:
     """
-    Carrega o perfil `name` do SQLite e roda apenas o diagnóstico da IA.
+    Carrega o perfil `name` do banco (AppStore) e roda apenas o diagnóstico da IA.
 
     Usado pela UI para a segunda fase (progressiva): o perfil já foi construído e
     exibido; esta chamada cobre só a espera pela API da Anthropic. Cai para
     output/{name}_profile.json se o perfil não estiver no banco.
     """
-    with Database() as db:
-        record = db.get_analysis(name)
+    with AppStore() as store:
+        record = store.get_analysis(name)
     if record is not None:
         profile = record["profile"]
     else:
@@ -235,12 +238,14 @@ def run_diagnosis(name: str, on_progress=None, export_json: bool = False) -> dic
 
 def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.WHITE,
                     on_progress=None, depth: int = STOCKFISH_DEPTH,
-                    subject: str | None = None, export_json: bool = True) -> dict:
+                    subject: str | None = None, export_json: bool = True,
+                    owner_id: int | None = None) -> dict:
     """
     Constrói (e salva) apenas o perfil de fraquezas a partir de um arquivo PGN,
     sem rodar o diagnóstico da IA. Retorna o profile_dict.
 
-    player_name: chave única da análise; subject: nome exibido (default: player_name).
+    player_name: chave única da análise; subject: nome exibido (default: player_name);
+    owner_id: id da conta dona da análise (None = sem dono, ex.: CLI).
     """
     print(f"\n=== Iniciando análise de {player_name} (depth {depth}) ===\n")
 
@@ -252,13 +257,14 @@ def analyze_profile(pgn_path: str, player_name: str, player_color: bool = chess.
     games_data = _process_games(game_color_pairs, on_progress, depth=depth)
     return _build_profile_phase(games_data, player_name, "pgn", on_progress, depth=depth,
                                 subject=subject, n_games=len(games),
-                                export_json=export_json)
+                                export_json=export_json, owner_id=owner_id)
 
 
 def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=None,
                                   profile_name: str | None = None,
                                   depth: int = STOCKFISH_DEPTH,
-                                  export_json: bool = True) -> dict:
+                                  export_json: bool = True,
+                                  owner_id: int | None = None) -> dict:
     """
     Constrói (e salva) apenas o perfil de fraquezas a partir de um username do
     Chess.com, sem rodar o diagnóstico da IA. Retorna o profile_dict.
@@ -266,6 +272,7 @@ def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=
     profile_name: nome usado para salvar o perfil (default: username). Permite à UI
     prefixar o perfil com o dono (namespacing por pessoa) sem afetar a busca.
     depth: profundidade UCI da validação Stockfish.
+    owner_id: id da conta dona da análise (None = sem dono, ex.: CLI).
     """
     print(f"\n=== Iniciando análise de {username} via Chess.com API (depth {depth}) ===\n")
 
@@ -276,11 +283,12 @@ def analyze_profile_from_username(username: str, n_games: int = 50, on_progress=
     games_data = _process_games(game_color_pairs, on_progress, depth=depth)
     return _build_profile_phase(games_data, profile_name or username, "chess_com",
                                 on_progress, depth=depth, subject=username,
-                                n_games=len(game_color_pairs), export_json=export_json)
+                                n_games=len(game_color_pairs), export_json=export_json,
+                                owner_id=owner_id)
 
 
 def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.WHITE,
-                   on_progress=None, depth: int = STOCKFISH_DEPTH):
+                   on_progress=None, depth: int = STOCKFISH_DEPTH, owner_id: int | None = None):
     """
     Pipeline completo de análise de um jogador a partir de um arquivo PGN.
 
@@ -291,14 +299,15 @@ def analyze_player(pgn_path: str, player_name: str, player_color: bool = chess.W
     depth: profundidade UCI da validação Stockfish.
     Salva output/{player_name}_profile.json e output/{player_name}_diagnosis.json.
     """
-    profile = analyze_profile(pgn_path, player_name, player_color, on_progress, depth=depth)
+    profile = analyze_profile(pgn_path, player_name, player_color, on_progress, depth=depth,
+                              owner_id=owner_id)
     diagnosis = _diagnose_and_save(profile, player_name, on_progress)
     print(f"\nArquivos salvos em '{OUTPUT_DIR}/'")
     return profile, diagnosis
 
 
 def analyze_player_from_username(username: str, n_games: int = 50, on_progress=None,
-                                 depth: int = STOCKFISH_DEPTH):
+                                 depth: int = STOCKFISH_DEPTH, owner_id: int | None = None):
     """
     Pipeline completo de análise a partir de um username do Chess.com.
 
@@ -310,7 +319,8 @@ def analyze_player_from_username(username: str, n_games: int = 50, on_progress=N
     on_progress: optional callback(stage, current, total, message)
     depth: profundidade UCI da validação Stockfish.
     """
-    profile = analyze_profile_from_username(username, n_games, on_progress, depth=depth)
+    profile = analyze_profile_from_username(username, n_games, on_progress, depth=depth,
+                                            owner_id=owner_id)
     diagnosis = _diagnose_and_save(profile, username, on_progress)
     print(f"\nArquivos salvos em '{OUTPUT_DIR}/'")
     return profile, diagnosis
@@ -325,7 +335,17 @@ def _main(argv=None):
                         help="Player color when using --pgn (default: white)")
     parser.add_argument("--depth", type=int, default=STOCKFISH_DEPTH,
                         help=f"Stockfish search depth (default: {STOCKFISH_DEPTH})")
+    parser.add_argument("--owner", help="Account (login) that will own the analysis in the web UI. "
+                                        "Without it, the admin account claims it on next login.")
     args = parser.parse_args(argv)
+
+    owner_id = None
+    if args.owner:
+        with AppStore() as store:
+            owner = store.get_user_by_username(args.owner)
+        if owner is None:
+            parser.error(f"unknown account: {args.owner!r} (create it with: python manage.py create-user)")
+        owner_id = owner["id"]
 
     if args.pgn:
         analyze_player(
@@ -333,9 +353,11 @@ def _main(argv=None):
             player_name=args.user,
             player_color=chess.WHITE if args.color == "white" else chess.BLACK,
             depth=args.depth,
+            owner_id=owner_id,
         )
     else:
-        analyze_player_from_username(username=args.user, n_games=args.games, depth=args.depth)
+        analyze_player_from_username(username=args.user, n_games=args.games, depth=args.depth,
+                                     owner_id=owner_id)
 
 
 if __name__ == "__main__":

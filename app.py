@@ -1,9 +1,5 @@
-import hmac
-
 import streamlit as st
 import streamlit.components.v1 as components
-
-from config import APP_PASSWORD
 
 st.set_page_config(
     page_title="Chess Profiler",
@@ -13,6 +9,7 @@ st.set_page_config(
 
 from ui.i18n import t
 from ui.profiles import analysis_label
+from ui.auth import flush_cookie_ops, render_account_sidebar, require_login
 from ui.store import delete_analysis, ensure_legacy_imported, list_analyses, normalize_name
 from ui.style import inject_css
 
@@ -23,38 +20,42 @@ if "lang" not in st.session_state:
     st.session_state.lang = "pt"
 
 
-def _check_password() -> bool:
-    """Shared-password gate for the private deploy.
-
-    If APP_PASSWORD is unset (local/dev) there is no gate. Otherwise the app is
-    blocked until the visitor enters the matching password. This is a lightweight
-    gate for a trusted handful of friends — not a real auth/identity system.
-    """
-    if not APP_PASSWORD:
-        return True
-    if st.session_state.get("_authenticated"):
-        return True
-
-    _, col, _ = st.columns([1, 1.2, 1])
-    with col:
-        st.markdown(f'<div class="cp-title" style="margin:4rem 0 1.5rem">{t("auth.title")}</div>',
-                    unsafe_allow_html=True)
-        entered = st.text_input(t("auth.password"), type="password", key="_password_input")
-        if entered:
-            if hmac.compare_digest(entered, APP_PASSWORD):
-                st.session_state["_authenticated"] = True
-                del st.session_state["_password_input"]
-                st.rerun()
-            else:
-                st.error(t("auth.wrong"))
-    return False
+def _render_language_radio(disabled: bool = False):
+    # Disabled while an analysis is running: switching widgets mid-run triggers a
+    # rerun that would interrupt the in-flight pipeline.
+    st.radio(
+        t("lang.label"),
+        options=["pt", "en"],
+        format_func=lambda x: "Português" if x == "pt" else "English",
+        horizontal=True,
+        key="lang",
+        disabled=disabled,
+    )
 
 
-if not _check_password():
-    st.stop()
+def _render_brand():
+    st.markdown(
+        f'<div class="cp-brand">{t("nav.title")}</div><div class="cp-brand-sub">{t("nav.subtitle")}</div>',
+        unsafe_allow_html=True,
+    )
+    st.write("")
 
-# ── Saved analyses (SQLite is the single source of truth) ─────────────────────
-ensure_legacy_imported()
+
+def _login_sidebar():
+    with st.sidebar:
+        _render_brand()
+        _render_language_radio()
+
+
+# ── Login ─────────────────────────────────────────────────────────────────────
+# Without a valid session, require_login() draws the sign-in / sign-up screen (plus
+# a minimal sidebar, so the "lang" widget exists on both screens) and stops here.
+user = require_login(on_login_page=_login_sidebar)
+
+# ── Saved analyses of this account (AppStore is the single source of truth) ──
+claimed = ensure_legacy_imported()
+if claimed:
+    st.toast(t("auth.claimed", n=claimed))
 analyses = list_analyses()
 summaries = {a["name"]: a for a in analyses}
 
@@ -72,11 +73,7 @@ def _on_profile_change():
 
 
 with st.sidebar:
-    st.markdown(
-        f'<div class="cp-brand">{t("nav.title")}</div><div class="cp-brand-sub">{t("nav.subtitle")}</div>',
-        unsafe_allow_html=True,
-    )
-    st.write("")
+    _render_brand()
 
     # ── Analysis selector ─────────────────────────────────────────────────────
     # The widget mirrors active_profile: programmatic changes (a new analysis, a
@@ -127,17 +124,10 @@ with st.sidebar:
     st.write("")
     st.write("")
 
-    # ── Language ──────────────────────────────────────────────────────────────
-    # Disabled while an analysis is running: switching widgets mid-run triggers a
-    # rerun that would interrupt the in-flight pipeline.
-    st.radio(
-        t("lang.label"),
-        options=["pt", "en"],
-        format_func=lambda x: "Português" if x == "pt" else "English",
-        horizontal=True,
-        key="lang",
-        disabled=_busy,
-    )
+    # ── Language + account ────────────────────────────────────────────────────
+    _render_language_radio(disabled=_busy)
+    st.write("")
+    render_account_sidebar(user, busy=_busy)
 
 from ui.pages.home import render as render_home
 from ui.pages.analyze import render as render_analyze
@@ -154,6 +144,9 @@ st.divider()
 render_explorer()
 st.divider()
 render_diagnosis()
+
+# Writes the session cookie in the browser right after sign-in.
+flush_cookie_ops()
 
 # ── Scroll-spy: highlight active section in the sidebar ───────────────────────
 components.html(

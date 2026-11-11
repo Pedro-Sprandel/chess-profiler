@@ -29,11 +29,13 @@ Partidas (Chess.com API ou PGN) — primeiros OPENING_MOVES_TO_SKIP lances ignor
     Claude classifica fraquezas em PRIMARY/SECONDARY/NOISE
     e identifica a causa raiz por trás dos sintomas
         ↓
-Perfil + Diagnóstico (bilíngue EN/PT) → tabela `analyses` (SQLite) → Interface Streamlit
+Perfil + Diagnóstico (bilíngue EN/PT) → tabela `analyses` (AppStore: Postgres ou SQLite)
+        → Interface Streamlit com login (cada conta vê só as próprias análises)
 ```
 
 **Stack:** Python 3.10+, python-chess, Stockfish (binário local), Anthropic API
-(claude-opus-4-6), Streamlit, Plotly, SQLite.
+(claude-opus-4-6), Streamlit, Plotly, SQLite (cache local) + PostgreSQL (dados de
+usuário, via `DATABASE_URL`; psycopg 3 + pool).
 
 ---
 
@@ -42,14 +44,15 @@ Perfil + Diagnóstico (bilíngue EN/PT) → tabela `analyses` (SQLite) → Inter
 ```
 v1/
 ├── app.py                          ← entrada Streamlit (single-page scroll + scroll-spy)
-├── main.py                         ← pipeline CLI (_main(argv=None), --user, --games, --pgn, --color)
-├── config.py                       ← STOCKFISH_PATH, ANTHROPIC_API_KEY, thresholds
+├── main.py                         ← pipeline CLI (_main(argv=None), --user, --games, --pgn, --color, --owner)
+├── manage.py                       ← admin: create-user, set-password, delete-user, list-users, import-sqlite
+├── config.py                       ← STOCKFISH_PATH, ANTHROPIC_API_KEY, DATABASE_URL, login, thresholds
 ├── eval_fen.py                     ← utilitário CLI para avaliar uma FEN manualmente
 ├── requirements.txt
 ├── .env                            ← ANTHROPIC_API_KEY (não versionado)
 ├── data/
 │   ├── silman_concepts.json        ← base de conhecimento: 18 conceitos (17 estratégicos + missed_tactic)
-│   └── profiler.db                 ← SQLite: cache Stockfish, posições, resultados, análises, explicações
+│   └── profiler.db                 ← SQLite: cache Stockfish, posições, resultados (+ dados de usuário sem DATABASE_URL)
 ├── modules/
 │   ├── pgn_loader.py               ← carrega partidas de arquivo ou string PGN
 │   ├── chess_com_loader.py         ← busca N partidas recentes via API Chess.com
@@ -58,14 +61,16 @@ v1/
 │   ├── concept_relevance.py        ← filtra posições instrutivas (3 gates causais)
 │   ├── profile_builder.py          ← acumula fraquezas longitudinalmente
 │   ├── ai_diagnostician.py         ← prompt Claude + parse JSON bilíngue estruturado
-│   ├── db.py                       ← camada SQLite (6 tabelas, WAL mode)
-│   ├── analysis_store.py           ← importa perfis JSON legados de output/ para o SQLite
+│   ├── db.py                       ← cache local SQLite (fen_cache, positions, analysis_results)
+│   ├── app_store.py                ← dados duráveis: contas, sessões, análises, explicações (Postgres|SQLite)
+│   ├── analysis_store.py           ← importa perfis JSON legados de output/ para o AppStore
 │   └── fen_fetcher.py              ← busca FENs do Chess.com com filtros (não integrado ao pipeline)
 ├── .streamlit/config.toml          ← tema escuro (paleta sóbria)
 ├── ui/
 │   ├── i18n.py                     ← chaves EN/PT-BR, função t(key, **kwargs)
 │   ├── style.py                    ← paleta, CSS global, helpers (section_header, badge)
-│   ├── store.py                    ← acesso da UI às análises salvas (SQLite)
+│   ├── auth.py                     ← tela de login/cadastro, cookie de sessão, sair, trocar senha
+│   ├── store.py                    ← acesso da UI às análises da conta logada (AppStore)
 │   ├── profiles.py                 ← nome interno único + rótulos legíveis das análises
 │   ├── concepts.py                 ← nomes/categorias de conceitos localizados (lê o JSON)
 │   ├── components/
@@ -77,7 +82,7 @@ v1/
 │       ├── profile.py              ← dashboard de métricas + gráficos
 │       ├── explorer.py             ← tabuleiro SVG com setas de lance/melhor lance
 │       └── diagnosis.py            ← causa raiz, classificação, plano de estudo
-├── tests/                          ← 269 testes (ver tabela na seção Testes)
+├── tests/                          ← 349 testes (ver tabela na seção Testes)
 └── output/                         ← exportação JSON da CLI ({user}_profile.json, etc.)
 ```
 
@@ -101,6 +106,11 @@ TACTICAL_THRESHOLD_CP = 9000  # acima disso a avaliação é considerada tática
 HTTP_TIMEOUT = 15             # timeout (s) das chamadas à API do Chess.com
 ANTHROPIC_MODEL = "claude-opus-4-6"
 ANTHROPIC_MAX_TOKENS = 8192
+DATABASE_URL = os.getenv("DATABASE_URL")   # postgresql://… → dados de usuário no Postgres; None → SQLite
+DB_POOL_MAX = 5               # conexões no pool Postgres por processo
+SESSION_TTL_DAYS = 30         # duração do login (cookie cp_session)
+ALLOW_SIGNUP = True           # env ALLOW_SIGNUP=0 fecha o cadastro pela UI
+SIGNUP_CODE = None            # código de convite para criar conta (fallback: APP_PASSWORD)
 
 # config.validate_stockfish_path() valida existência/execução do binário (chamada por open_engine())
 ```
@@ -108,6 +118,8 @@ ANTHROPIC_MAX_TOKENS = 8192
 **`.env`** (não versionado)
 ```
 ANTHROPIC_API_KEY=sk-ant-...
+DATABASE_URL=postgresql://user:pass@host/db?sslmode=require   # opcional (deploy)
+SIGNUP_CODE=...                                               # opcional (deploy público)
 ```
 
 ---
@@ -130,7 +142,12 @@ python eval_fen.py "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 python eval_fen.py "<FEN>" --depth 15 --json
 
 # Testes
-pytest                          # 293 testes, todos passando
+pytest                          # 349 testes, todos passando
+TEST_DATABASE_URL=postgresql://localhost/chess_test pytest   # mesma suíte contra Postgres real
+
+# Contas (mesmo banco da UI)
+python manage.py create-user ana
+python manage.py import-sqlite data/profiler.db --owner ana   # SQLite → Postgres
 pytest -v --tb=short
 pytest tests/test_position_analyzer.py -v
 pytest tests/test_pipeline_e2e.py -v   # requer Stockfish instalado
@@ -384,16 +401,6 @@ db.insert_analysis_results_bulk(rows)  # rows: list de (pos_id, concept_key, det
 db.get_analysis_results(position_id) -> list
 db.concept_error_summary() -> list    # agrega erros por conceito em todos os resultados
 
-# Análises (fonte única da UI: perfil + diagnóstico)
-db.save_analysis(name, profile, subject, source, depth, n_games, created_at=None)  # upsert, preserva diagnóstico
-db.save_diagnosis(name, diagnosis) -> bool
-db.list_analyses() -> list            # resumos, mais recente primeiro (sem o JSON completo)
-db.get_analysis(name) -> dict | None  # resumo + "profile" + "diagnosis" (parseados)
-db.delete_analysis(name)
-
-# Cache das explicações "Explicar este erro"
-db.get_explanation(fen, move_played, concept_key, lang) / db.save_explanation(...)
-
 db.close()  # ou use como context manager (with Database() as db:)
 ```
 `Database()` resolve o caminho padrão em tempo de chamada (`DEFAULT_DB_PATH`), o que
@@ -403,14 +410,55 @@ permite ao `tests/conftest.py` redirecionar todo teste para um SQLite temporári
 - `fen_cache (fen, depth, score_cp, best_move, analyzed_at)` — PK: (fen, depth)
 - `positions (id, fen, move_number, move_played, player_color, white, black, white_rating, black_rating, opening, eco, game_url, source, imported_at)`
 - `analysis_results (id, position_id→positions, concept_key, detected, details_json, is_error, error_magnitude, analyzed_at)`
-- `analyses (name PK, subject, source, n_games, depth, total_games, total_positions, overall_error_rate, n_weaknesses, profile_json, diagnosis_json, created_at, diagnosed_at)`
-- `explanations (fen, move_played, concept_key, lang, text, created_at)` — PK: (fen, move_played, concept_key, lang)
+
+O `Database` é o cache **local e regenerável** (milhares de linhas por análise, escrita
+intensa — não compensa a latência de um banco remoto). Dados de usuário ficam no AppStore.
+
+### `modules/app_store.py`
+Dados duráveis: contas, sessões de login, análises (perfil + diagnóstico) e o cache de
+explicações. Backend escolhido em tempo de execução: **PostgreSQL** se `DATABASE_URL`
+começa com `postgresql://`/`postgres://` (pool `psycopg_pool`, autocommit, conexões
+ociosas checadas), senão **SQLite** no mesmo arquivo do `Database` (`DEFAULT_DB_PATH`).
+SQL único com `?` (trocado por `%s` no Postgres), `ON CONFLICT` e `RETURNING`;
+timestamps em UTC gerados em Python (`'YYYY-MM-DD HH:MM:SS.ffffff'`, ordenáveis como texto).
+O schema é criado/migrado uma vez por processo (bancos antigos ganham `analyses.owner_id`).
+
+```python
+with AppStore() as store:                 # AppStore(url=...) / AppStore(path=...)
+    # Contas — AuthError(code) em falhas; code traduzido na UI como auth.err.<code>
+    user = store.create_user(username, password)   # 1ª conta do banco → is_admin
+    store.authenticate(username, password) -> user  # invalid_credentials | locked
+    store.change_password(user_id, current, new, keep_token=token)  # derruba outras sessões
+    store.set_password(username, new)              # reset administrativo
+    store.get_user(id) / get_user_by_username(name) / list_users() / delete_user(id)
+    # Sessões (o banco guarda só sha256(token))
+    token = store.create_session(user_id)
+    store.user_for_token(token) -> user | None     # None se expirada/revogada
+    store.revoke_session(token) / revoke_user_sessions(user_id) / purge_expired_sessions()
+    # Análises — owner_id=None = sem filtro (CLI/admin); a UI sempre passa o id
+    store.save_analysis(name, profile, subject, source, depth, n_games, created_at=None, owner_id=None)
+    store.save_diagnosis(name, diagnosis) -> bool
+    store.list_analyses(owner_id) / get_analysis(name, owner_id) / delete_analysis(name, owner_id)
+    store.claim_orphan_analyses(owner_id)          # análises sem dono → admin
+    store.get_explanation(...) / save_explanation(...)
+```
+
+Regras de conta: usuário `^[A-Za-z0-9_.-]{3,32}$` (único, sem diferenciar maiúsculas),
+senha 8–256 caracteres, hash PBKDF2-HMAC-SHA256 (600k iterações, salt de 16 bytes,
+formato `pbkdf2_sha256$iter$salt$hash`, rehash automático se as iterações subirem),
+5 falhas seguidas → bloqueio de 15 min, login de usuário inexistente gasta o mesmo tempo.
+
+**Schema (AppStore):**
+- `users (id PK, username, username_key UNIQUE, password_hash, is_admin, failed_logins, locked_until, created_at, last_login_at)`
+- `sessions (token_hash PK, user_id→users ON DELETE CASCADE, created_at, expires_at)`
+- `analyses (name PK, subject, source, n_games, depth, total_games, total_positions, overall_error_rate, n_weaknesses, profile_json, diagnosis_json, created_at, diagnosed_at, owner_id→users ON DELETE CASCADE)`
+- `explanations (fen, move_played, concept_key, lang, text, created_at)` — PK: (fen, move_played, concept_key, lang); compartilhado entre contas
 - `legacy_imports (name PK, imported_at)` — arquivos de output/ já importados (um perfil
   excluído na UI não é reimportado)
 
 ### `modules/analysis_store.py`
 ```python
-import_legacy_outputs(db, output_dir) -> int   # importa *_profile.json (+ diagnóstico) uma vez
+import_legacy_outputs(store, output_dir, owner_id=None) -> int   # importa *_profile.json (+ diagnóstico) uma vez
 parse_profile_name(name) -> {"subject", "depth", "n_games"}   # "{subject}__d{depth}[_g{n}]_{uid}"
 ```
 
@@ -436,14 +484,17 @@ Sequência interna:
 3. Por jogo: pula os primeiros `OPENING_MOVES_TO_SKIP` lances completos →
    `detect_concepts()` em cada posição → `batch_validate()` (duas passadas)
    apenas nas posições com pelo menos um conceito detectado
-4. Persiste tudo no SQLite via `_persist_games_to_db()` (com dedupe)
+4. Persiste posições/resultados no SQLite local via `_persist_games_to_db()` (com dedupe)
 5. `build_profile()` — aplica `is_instructive()` como gate causal; adiciona
    `generated_at`; `_build_profile_phase` anexa `metadata` (player/source/depth) e
-   grava em `analyses` (`db.save_analysis`)
-6. `diagnose()` — chama Claude, retorna diagnóstico bilíngue, gravado com `db.save_diagnosis`
+   grava em `analyses` (`AppStore.save_analysis`, com `owner_id`)
+6. `diagnose()` — chama Claude, retorna diagnóstico bilíngue, gravado com `AppStore.save_diagnosis`
+
+Todas as funções de análise aceitam `owner_id` (a UI passa a conta logada; a CLI aceita
+`--owner USUARIO`; sem dono, a conta administradora assume a análise no próximo login).
 
 `export_json=True` (padrão, usado pela CLI) também escreve `output/{name}_profile.json` e
-`output/{name}_diagnosis.json`; a UI passa `export_json=False` — o SQLite é a única
+`output/{name}_diagnosis.json`; a UI passa `export_json=False` — o AppStore é a única
 persistência dela. `run_diagnosis(name)` lê o perfil do banco (fallback: JSON).
 
 `on_progress(stage, current, total, message)` — callback opcional para a UI do Streamlit
@@ -458,7 +509,8 @@ módulo em sequência, separados por `st.divider()`.
 
 ```
 app.py
- ├── sidebar: seletor de idioma + seletor de perfil ativo + nav links
+ ├── require_login()   → ui/auth.py: sem sessão válida desenha login/cadastro e st.stop()
+ ├── sidebar: seletor de perfil ativo + nav links + idioma + conta (trocar senha / sair)
  ├── render_home()     → ui/pages/home.py      #home
  ├── render_analyze()  → ui/pages/analyze.py   #analyze
  ├── render_profile()  → ui/pages/profile.py   #profile-dashboard
@@ -477,6 +529,16 @@ um acento azul-ardósia, vermelho-tijolo para erros, verde para melhor lance; se
 Seções usam `section_header(eyebrow, title, subtitle)`; gráficos Plotly compartilham
 `_style()` em `weakness_chart.py` (barras horizontais ordenadas).
 
+**Login (`ui/auth.py`):** `st.session_state.auth = {"user", "token"}`. A cada execução
+o token (do session_state ou do cookie `cp_session`, lido via `st.context.cookies`) é
+revalidado com `AppStore.user_for_token` — sair/trocar senha/expirar derruba o acesso na
+hora. O cookie é gravado/apagado por `flush_cookie_ops()` com `components.html` (mesma
+origem do scroll-spy), `SameSite=Strict`, `Secure` em HTTPS, validade `SESSION_TTL_DAYS`.
+Abas "Entrar" / "Criar conta" (`st.form`; código de convite se `SIGNUP_CODE`; cadastro
+fechado se `ALLOW_SIGNUP=0`). Entrar/sair limpa o `session_state` (exceto `lang`).
+`ui/store.py` filtra tudo pela conta logada; na 1ª execução da sessão, o admin assume as
+análises sem dono (`claim_orphan_analyses`).
+
 **Análise ativa** (`st.session_state.active_profile`): o `name` (chave interna única)
 de uma linha da tabela `analyses`. Padrão: a análise mais recente; valores legados
 `{name}_profile.json` são normalizados. O seletor da sidebar (`profile_widget`) espelha
@@ -490,7 +552,7 @@ Na primeira execução da sessão, `ui/store.ensure_legacy_imported()` migra os 
 ```python
 t("chave")                # retorna string no idioma atual (st.session_state.lang)
 t("chave", param=valor)   # com interpolação
-# 107 chaves, EN e PT-BR simétricas
+# 180 chaves, EN e PT-BR simétricas
 # Idioma: st.radio com key="lang" → persiste em session_state
 ```
 
@@ -560,7 +622,8 @@ Conceito tático derivado (atribuído por gate de precedência, não por detecto
 ## Testes
 
 ```bash
-pytest                                  # 293 testes, todos passando
+pytest                                  # 349 testes, todos passando
+TEST_DATABASE_URL=postgresql://... pytest  # AppStore contra Postgres real (tabelas recriadas por teste)
 pytest -v --tb=short
 pytest tests/test_position_analyzer.py  # 78 testes com FENs conhecidas
 pytest tests/test_pipeline_e2e.py -v    # integração real (requer Stockfish)
@@ -575,14 +638,16 @@ Cobertura por arquivo:
 | `test_stockfish_validator.py` | 23 | Mock `popen_uci`, cache, guards ΔWinP, passada de confirmação/MultiPV |
 | `test_concept_relevance.py` | 20 | Gates causais, scoring, `is_missed_tactic`/`is_converted_tactic` via SEE |
 | `test_chess_com_loader.py` | 16 | Mock HTTP, detecção de cor, limite n_games |
-| `test_app.py` | 21 | AppTest: startup, i18n, estado vazio, análise no SQLite, exclusão, diagnóstico ausente |
+| `test_app.py` | 34 | AppTest: startup, i18n, estado vazio, exclusão, diagnóstico ausente; login/cadastro/convite, cookie, logout, sessão revogada, isolamento entre contas |
+| `test_app_store.py` | 40 | Contas, hash, bloqueio, sessões, troca/reset de senha, análises por dono, órfãs, migração de banco antigo |
+| `test_manage.py` | 6 | `manage.py`: contas e `import-sqlite` |
 | `test_ai_diagnostician.py` | 14 | Mock cliente Anthropic, formato bilíngue EN/PT |
 | `test_pipeline_e2e.py` | 13 | Integração real Stockfish; `@skip_no_sf` se binário ausente |
-| `test_db.py` | 20 | Cache, posições, `find_position`, resultados, análises, explicações |
-| `test_analysis_store.py` | 8 | Importação de JSON legados (idempotente, não reimporta excluídos) |
+| `test_db.py` | 12 | Cache, posições, `find_position`, resultados |
+| `test_analysis_store.py` | 9 | Importação de JSON legados (idempotente, não reimporta excluídos, dono) |
 | `test_pgn_loader.py` | 11 | Parsing PGN, iteração de posições |
-| `test_cli.py` | 11 | `_main(argv=...)`, roteamento pgn vs username, flags |
-| `test_main.py` | 12 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games` |
+| `test_cli.py` | 14 | `_main(argv=...)`, roteamento pgn vs username, flags, `--owner` |
+| `test_main.py` | 13 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games`; `owner_id` |
 | `test_diagnosis_card.py` | 6 | `format_root_cause`, `format_weakness_table`, `format_study_priority` |
 | `test_weakness_chart.py` | 6 | Figuras Plotly, ordenação, lista vazia |
 | `test_config.py` | 4 | Valores e tipos dos thresholds |
@@ -641,3 +706,6 @@ um jogador ~500.
 - A base de conhecimento do Silman é extraída manualmente para preservar fidelidade interpretativa
 - Diagnóstico bilíngue (EN/PT-BR) via uma única chamada à API, retrocompatível com arquivos legacy
 - Validação com jogadores reais do Chess.com em faixas de rating 400–1600
+- Login com contas individuais e persistência durável: dados de usuário (contas, sessões,
+  análises) separados do cache computacional — os primeiros num banco relacional
+  gerenciado (PostgreSQL), o segundo em SQLite local regenerável

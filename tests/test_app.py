@@ -91,50 +91,80 @@ SAMPLE_DIAGNOSIS = {
 }
 
 PYTEST_PROFILE = "_pytest"
+PASSWORD = "correct-horse"
+
+# Session of the account every test is logged in as (set by the autouse fixture).
+_AUTH: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def logged_in():
+    """Create an account + login session; _app() injects it into the AppTest.
+
+    conftest.py points the AppStore at a per-test temp file (or a scratch Postgres
+    database with TEST_DATABASE_URL), so nothing leaks into data/profiler.db.
+    """
+    from modules.app_store import AppStore
+    with AppStore() as store:
+        user = store.create_user("pytest_user", PASSWORD)
+        token = store.create_session(user["id"])
+    _AUTH.clear()
+    _AUTH.update({"user": user, "token": token})
+    yield _AUTH
+
+
+def _app(logged: bool = True) -> AppTest:
+    at = AppTest.from_file(APP_PATH, default_timeout=15)
+    if logged:
+        at.session_state["auth"] = {"user": dict(_AUTH["user"]), "token": _AUTH["token"]}
+    return at
+
+
+def _save(name, profile=SAMPLE_PROFILE, diagnosis=None, owner_id="me", **kwargs):
+    from modules.app_store import AppStore
+    if owner_id == "me":
+        owner_id = _AUTH["user"]["id"]
+    with AppStore() as store:
+        store.save_analysis(name, profile, owner_id=owner_id, **kwargs)
+        if diagnosis is not None:
+            store.save_diagnosis(name, diagnosis)
 
 
 @pytest.fixture()
 def with_profile_files():
-    """Store a sample analysis (profile + diagnosis) in the test DB and yield its name.
-
-    conftest.py points every Database() at a per-test temp file, so nothing leaks
-    into data/profiler.db.
-    """
-    from modules.db import Database
-    with Database() as db:
-        db.save_analysis(PYTEST_PROFILE, SAMPLE_PROFILE, subject="pytest_player",
-                         source="pgn", depth=10, n_games=2)
-        db.save_diagnosis(PYTEST_PROFILE, SAMPLE_DIAGNOSIS)
+    """Store a sample analysis (profile + diagnosis) owned by the logged-in user."""
+    _save(PYTEST_PROFILE, diagnosis=SAMPLE_DIAGNOSIS, subject="pytest_player",
+          source="pgn", depth=10, n_games=2)
     yield PYTEST_PROFILE
 
 
 class TestAppStartup:
     def test_runs_without_exception(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         assert not at.exception
 
     def test_default_language_is_portuguese(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         assert at.session_state.lang == "pt"
 
     def test_sidebar_language_radio_present(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         assert not at.exception
         radios = at.radio
         assert any(r.key == "lang" for r in radios)
 
     def test_active_profile_initialised_in_session_state(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         assert "active_profile" in at.session_state
 
 
 class TestLanguageSwitching:
     def test_switch_to_portuguese(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         lang_radio = next(r for r in at.radio if r.key == "lang")
         lang_radio.set_value("pt").run()
@@ -142,7 +172,7 @@ class TestLanguageSwitching:
         assert at.session_state.lang == "pt"
 
     def test_switch_back_to_english(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         next(r for r in at.radio if r.key == "lang").set_value("pt").run()
         # Re-fetch the widget after the previous run
@@ -151,7 +181,7 @@ class TestLanguageSwitching:
         assert at.session_state.lang == "en"
 
     def test_page_renders_after_language_switch(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         lang_radio = next(r for r in at.radio if r.key == "lang")
         lang_radio.set_value("pt").run()
@@ -160,19 +190,19 @@ class TestLanguageSwitching:
 
 class TestNoDataState:
     def test_profile_section_shows_no_data_info(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = None
         at.run()
         assert not at.exception
 
     def test_diagnosis_section_shows_no_data_info(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = None
         at.run()
         assert not at.exception
 
     def test_analyze_tab_fresh_renders(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         assert not at.exception
         assert any(r.key == "analyze_source" for r in at.radio)
@@ -180,7 +210,7 @@ class TestNoDataState:
 
 class TestWithProfileData:
     def test_profile_metrics_visible(self, with_profile_files):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = with_profile_files
         at.run()
         assert not at.exception
@@ -188,47 +218,47 @@ class TestWithProfileData:
         assert "2" in metric_values or 2 in metric_values
 
     def test_diagnosis_renders_without_exception(self, with_profile_files):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = with_profile_files
         at.run()
         assert not at.exception
 
     def test_diagnosis_renders_in_portuguese(self, with_profile_files):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = with_profile_files
         at.session_state["lang"] = "pt"
         at.run()
         assert not at.exception
 
     def test_profile_selector_picks_up_fixture_file(self, with_profile_files):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = with_profile_files
         at.run()
         assert not at.exception
         assert at.session_state.active_profile == with_profile_files
 
     def test_defaults_to_most_recent_analysis(self, with_profile_files):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         assert not at.exception
         assert at.session_state.active_profile == with_profile_files
 
     def test_legacy_filename_in_session_is_normalized(self, with_profile_files):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = with_profile_files + "_profile.json"
         at.run()
         assert not at.exception
         assert at.session_state.active_profile == with_profile_files
 
     def test_deleted_selection_falls_back(self, with_profile_files):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = "does_not_exist"
         at.run()
         assert not at.exception
         assert at.session_state.active_profile == with_profile_files
 
     def test_diagnosis_cards_render(self, with_profile_files):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.session_state["active_profile"] = with_profile_files
         at.session_state["lang"] = "en"
         at.run()
@@ -239,10 +269,8 @@ class TestWithProfileData:
 
 class TestMissingDiagnosis:
     def test_generate_button_shown_when_no_diagnosis(self):
-        from modules.db import Database
-        with Database() as db:
-            db.save_analysis("_nodiag", SAMPLE_PROFILE, subject="x")
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        _save("_nodiag", subject="x")
+        at = _app()
         at.session_state["active_profile"] = "_nodiag"
         at.run()
         assert not at.exception
@@ -251,7 +279,7 @@ class TestMissingDiagnosis:
 
 class TestAnalyzePageInputs:
     def test_no_username_shows_error(self):
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at = _app()
         at.run()
         source_radio = next(r for r in at.radio if r.key == "analyze_source")
         source_radio.set_value(source_radio.options[0]).run()
@@ -264,15 +292,164 @@ class TestAnalyzePageInputs:
 
 class TestDeleteAnalysis:
     def test_delete_removes_from_db_and_falls_back(self, with_profile_files):
-        from modules.db import Database
-        with Database() as db:
-            db.save_analysis("_older", SAMPLE_PROFILE, subject="older",
-                             created_at="2020-01-01 00:00:00")
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        _save("_older", subject="older", created_at="2020-01-01 00:00:00")
+        at = _app()
         at.session_state["active_profile"] = with_profile_files
         at.run()
         next(b for b in at.button if b.key == "delete_confirm").click().run()
         assert not at.exception
-        with Database() as db:
-            assert db.get_analysis(with_profile_files) is None
+        from modules.app_store import AppStore
+        with AppStore() as store:
+            assert store.get_analysis(with_profile_files) is None
         assert at.session_state.active_profile == "_older"
+
+
+# ── Login ─────────────────────────────────────────────────────────────────────
+
+def _fill(at, **values):
+    for key, value in values.items():
+        next(w for w in at.text_input if w.key == key).input(value)
+
+
+def _submit(at, key):
+    next(b for b in at.button if b.key == key).click().run()
+
+
+class TestLoginGate:
+    def test_anonymous_sees_login_and_no_app(self, with_profile_files):
+        at = _app(logged=False)
+        at.run()
+        assert not at.exception
+        keys = {w.key for w in at.text_input}
+        assert {"login_username", "login_password", "signup_username"} <= keys
+        assert not any(r.key == "analyze_source" for r in at.radio)
+        assert "active_profile" not in at.session_state
+        assert any(r.key == "lang" for r in at.radio)
+
+    def test_login_with_valid_credentials(self, with_profile_files):
+        at = _app(logged=False)
+        at.run()
+        _fill(at, login_username="pytest_user", login_password=PASSWORD)
+        _submit(at, "login_submit")
+        assert not at.exception
+        assert at.session_state.auth["user"]["username"] == "pytest_user"
+        assert at.session_state.active_profile == with_profile_files
+        assert any(r.key == "analyze_source" for r in at.radio)
+        # The password typed in the form is not kept in session state.
+        assert "login_password" not in at.session_state
+
+    def test_wrong_password_shows_error(self):
+        at = _app(logged=False)
+        at.run()
+        _fill(at, login_username="pytest_user", login_password="wrong-password")
+        _submit(at, "login_submit")
+        assert not at.exception
+        assert "auth" not in at.session_state
+        assert len(at.error) == 1
+
+    def test_signup_creates_account_and_logs_in(self):
+        at = _app(logged=False)
+        at.run()
+        _fill(at, signup_username="newbie", signup_password="new-password",
+              signup_confirm="new-password")
+        _submit(at, "signup_submit")
+        assert not at.exception
+        user = at.session_state.auth["user"]
+        assert user["username"] == "newbie"
+        assert user["is_admin"] is False  # pytest_user was the first account
+        assert at.session_state.active_profile is None  # new account starts empty
+
+    def test_signup_password_mismatch(self):
+        at = _app(logged=False)
+        at.run()
+        _fill(at, signup_username="newbie", signup_password="new-password",
+              signup_confirm="other-password")
+        _submit(at, "signup_submit")
+        assert "auth" not in at.session_state
+        assert len(at.error) == 1
+
+    def test_signup_requires_invite_code_when_configured(self, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "SIGNUP_CODE", "s3cret")
+        at = _app(logged=False)
+        at.run()
+        _fill(at, signup_username="newbie", signup_password="new-password",
+              signup_confirm="new-password", signup_code="guess")
+        _submit(at, "signup_submit")
+        assert "auth" not in at.session_state
+        _fill(at, signup_code="s3cret")
+        _submit(at, "signup_submit")
+        assert at.session_state.auth["user"]["username"] == "newbie"
+
+    def test_signup_closed(self, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "ALLOW_SIGNUP", False)
+        at = _app(logged=False)
+        at.run()
+        assert not at.exception
+        assert not any(w.key == "signup_username" for w in at.text_input)
+
+    def test_session_resumed_from_cookie(self, monkeypatch, with_profile_files):
+        """A page reload has a fresh session_state; the cookie token restores the login."""
+        monkeypatch.setattr("ui.auth._cookie_token", lambda: _AUTH["token"])
+        at = _app(logged=False)
+        at.run()
+        assert not at.exception
+        assert at.session_state.auth["user"]["username"] == "pytest_user"
+        assert at.session_state.active_profile == with_profile_files
+
+    def test_revoked_session_goes_back_to_login(self):
+        from modules.app_store import AppStore
+        at = _app()
+        at.run()
+        with AppStore() as store:
+            store.revoke_session(_AUTH["token"])
+        at.run()
+        assert not at.exception
+        assert "auth" not in at.session_state
+        assert any(w.key == "login_username" for w in at.text_input)
+
+    def test_logout(self, with_profile_files):
+        from modules.app_store import AppStore
+        at = _app()
+        at.run()
+        next(b for b in at.button if b.key == "logout_btn").click().run()
+        assert not at.exception
+        assert "auth" not in at.session_state
+        assert "active_profile" not in at.session_state
+        with AppStore() as store:
+            assert store.user_for_token(_AUTH["token"]) is None
+
+
+class TestPerUserAnalyses:
+    def test_other_users_analyses_are_invisible(self, with_profile_files):
+        from modules.app_store import AppStore
+        with AppStore() as store:
+            other = store.create_user("someone_else", PASSWORD)
+        _save("_theirs", subject="theirs", owner_id=other["id"],
+              created_at="2099-01-01 00:00:00")  # newest overall, but not ours
+        at = _app()
+        at.session_state["active_profile"] = "_theirs"  # even if forced into the session
+        at.run()
+        assert not at.exception
+        assert at.session_state.active_profile == with_profile_files
+        assert "_theirs" not in next(s for s in at.selectbox if s.key == "profile_widget").options
+
+    def test_admin_adopts_orphan_analyses(self):
+        _save("_orphan", subject="legacy", owner_id=None)  # e.g. created before login existed
+        at = _app()  # pytest_user is the first account → admin
+        at.run()
+        assert not at.exception
+        assert at.session_state.active_profile == "_orphan"
+
+    def test_non_admin_does_not_adopt_orphans(self):
+        from modules.app_store import AppStore
+        with AppStore() as store:
+            user = store.create_user("regular", PASSWORD)
+            token = store.create_session(user["id"])
+        _save("_orphan", subject="legacy", owner_id=None)
+        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at.session_state["auth"] = {"user": user, "token": token}
+        at.run()
+        assert not at.exception
+        assert at.session_state.active_profile is None
