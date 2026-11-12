@@ -227,3 +227,14 @@ class TestDatabasePersistence:
         with AppStore() as store:
             assert store.get_analysis("sprandel__d10_x", owner_id=owner["id"]) is not None
             assert store.get_analysis("sprandel__d10_x", owner_id=owner["id"] + 1) is None
+
+    def test_unattributed_mistakes_go_to_classifier_and_stats_are_recorded(self, tmp_path):
+        from modules.app_store import AppStore
+        stats = {"candidates": 1, "cached": 0, "sent": 1, "accepted": 1, "skipped": 0}
+        with patch("main.classify_unattributed", return_value=stats) as mock_cls:
+            self._run_username(str(tmp_path), export_json=False)
+        mock_cls.assert_called_once()
+        with AppStore() as store:
+            profile = store.get_analysis("sprandel__d10_x")["profile"]
+        assert profile["metadata"]["llm_classification"] == stats
+        assert set(profile["attribution_summary"]) == {"rule", "llm", "unattributed"}

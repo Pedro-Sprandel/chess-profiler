@@ -10,6 +10,7 @@ from config import (
     WINP_ERROR_THRESHOLD,
     MATE_SCORE,
     TACTICAL_THRESHOLD_CP,
+    PV_PLIES,
     validate_stockfish_path,
 )
 
@@ -215,29 +216,36 @@ def validate_move(board_before: chess.Board, move_played: chess.Move,
         info_after = engine.analyse(board_after, chess.engine.Limit(depth=depth))
         score_after = info_after["score"].white().score(mate_score=MATE_SCORE)
 
-        return _classify(board_before, move_played, score_before, score_after, best_move)
+        result = _classify(board_before, move_played, score_before, score_after, best_move)
+        result["best_line"] = [m.uci() for m in (info_before.get("pv") or [])[:PV_PLIES]]
+        result["refutation_line"] = [m.uci() for m in (info_after.get("pv") or [])[:PV_PLIES]]
+        return result
 
     finally:
         engine.quit()
 
 
-def _analyse(board: chess.Board, depth: int, get_engine, db, multipv: int = 1) -> dict:
+def _analyse(board: chess.Board, depth: int, get_engine, db, multipv: int = 1,
+             need_pv: bool = False) -> dict:
     """
     Analisa uma posição resolvendo pelo cache SQLite quando possível.
 
     get_engine: callable que retorna (abrindo se necessário) a instância do engine —
     assim o engine só é aberto se alguma posição não estiver em cache.
+    need_pv: exige a linha principal; uma entrada de cache antiga, sem PV, é
+    re-analisada.
 
-    Retorna {"score_cp" (POV brancas), "best_move" (Move|None),
+    Retorna {"score_cp" (POV brancas), "best_move" (Move|None), "pv" (list[Move]),
              "second_move" (Move|None), "second_score_cp" (int|None)}.
     O cache guarda só a linha principal; num cache hit a segunda linha vem vazia.
     """
     fen = board.fen()
     if db:
         cached = db.get_cached_eval(fen, depth)
-        if cached:
+        if cached and (cached.get("pv") or not need_pv):
             bm = chess.Move.from_uci(cached["best_move"]) if cached["best_move"] else None
-            return {"score_cp": cached["score_cp"], "best_move": bm,
+            pv = [chess.Move.from_uci(u) for u in (cached.get("pv") or [])]
+            return {"score_cp": cached["score_cp"], "best_move": bm, "pv": pv,
                     "second_move": None, "second_score_cp": None}
 
     engine = get_engine()
@@ -251,6 +259,7 @@ def _analyse(board: chess.Board, depth: int, get_engine, db, multipv: int = 1) -
     main = infos[0]
     score_cp = main["score"].white().score(mate_score=MATE_SCORE)
     best_move = main["pv"][0] if main.get("pv") else None
+    pv = list(main.get("pv") or [])[:PV_PLIES]
 
     second_move = second_score_cp = None
     if len(infos) > 1 and infos[1].get("pv"):
@@ -258,10 +267,24 @@ def _analyse(board: chess.Board, depth: int, get_engine, db, multipv: int = 1) -
         second_score_cp = infos[1]["score"].white().score(mate_score=MATE_SCORE)
 
     if db:
-        db.cache_eval(fen, depth, score_cp, best_move.uci() if best_move else None)
+        db.cache_eval(fen, depth, score_cp, best_move.uci() if best_move else None,
+                      [m.uci() for m in pv])
 
-    return {"score_cp": score_cp, "best_move": best_move,
+    return {"score_cp": score_cp, "best_move": best_move, "pv": pv,
             "second_move": second_move, "second_score_cp": second_score_cp}
+
+
+def _with_lines(result: dict, before: dict, after: dict) -> dict:
+    """Anexa as linhas do engine ao resultado da classificação.
+
+    best_line: linha principal a partir da posição antes do lance (começa no melhor
+    lance). refutation_line: linha principal depois do lance jogado (começa na melhor
+    resposta do adversário). Usadas pela camada tática e pelos filtros de precisão
+    (modules/attribution.py) para olhar alguns lances à frente.
+    """
+    result["best_line"] = [m.uci() for m in before.get("pv") or []]
+    result["refutation_line"] = [m.uci() for m in after.get("pv") or []]
+    return result
 
 
 def batch_validate(positions: list, engine: chess.engine.SimpleEngine = None,
@@ -282,7 +305,8 @@ def batch_validate(positions: list, engine: chess.engine.SimpleEngine = None,
 
     positions: lista de (board_before, move_played)
     engine: instância existente do Stockfish (se None, cria e fecha a própria)
-    Retorna lista de dicts com resultados (formato de _classify).
+    Retorna lista de dicts com resultados (formato de _classify) + "best_line" e
+    "refutation_line" (UCI, até PV_PLIES lances; garantidas nos erros).
     """
     if confirm_depth is None:
         confirm_depth = STOCKFISH_CONFIRM_DEPTH
@@ -306,9 +330,9 @@ def batch_validate(positions: list, engine: chess.engine.SimpleEngine = None,
 
             before = _analyse(board_before, depth, get_engine, db)
             after  = _analyse(board_after,  depth, get_engine, db)
-            results[i] = _classify(board_before, move_played,
-                                   before["score_cp"], after["score_cp"],
-                                   before["best_move"])
+            results[i] = _with_lines(_classify(board_before, move_played,
+                                               before["score_cp"], after["score_cp"],
+                                               before["best_move"]), before, after)
 
         # ── Passada 2: confirmação dos erros em `confirm_depth` ─────────────
         if confirm_depth > depth:
@@ -319,11 +343,12 @@ def batch_validate(positions: list, engine: chess.engine.SimpleEngine = None,
                 board_after = board_before.copy()
                 board_after.push(move_played)
 
-                before = _analyse(board_before, confirm_depth, get_engine, db, multipv=2)
-                after  = _analyse(board_after,  confirm_depth, get_engine, db)
-                confirmed = _classify(board_before, move_played,
-                                      before["score_cp"], after["score_cp"],
-                                      before["best_move"])
+                before = _analyse(board_before, confirm_depth, get_engine, db, multipv=2,
+                                  need_pv=True)
+                after  = _analyse(board_after,  confirm_depth, get_engine, db, need_pv=True)
+                confirmed = _with_lines(_classify(board_before, move_played,
+                                                  before["score_cp"], after["score_cp"],
+                                                  before["best_move"]), before, after)
 
                 # Lance jogado era a 2ª melhor opção com gap pequeno → posição
                 # difícil, não um erro instrutivo.
@@ -334,6 +359,19 @@ def batch_validate(positions: list, engine: chess.engine.SimpleEngine = None,
                     confirmed["is_error"] = False
 
                 results[i] = confirmed
+
+        # Sem passada de confirmação, os erros vindos do cache antigo podem não ter
+        # linha principal: completa-as na profundidade de triagem.
+        else:
+            for i, screened in enumerate(results):
+                if not screened["is_error"] or (screened["best_line"] and screened["refutation_line"]):
+                    continue
+                board_before, move_played = positions[i]
+                board_after = board_before.copy()
+                board_after.push(move_played)
+                _with_lines(screened,
+                            _analyse(board_before, depth, get_engine, db, need_pv=True),
+                            _analyse(board_after, depth, get_engine, db, need_pv=True))
     finally:
         if owns_engine and eng is not None:
             eng.quit()

@@ -278,15 +278,32 @@
       "silman_chapter": 1,
       "silman_page": 26,
       "silman_category": "tática",
-      "description": "Oportunidade tática concreta deixada passar — tipicamente uma peça adversária pendurada que o jogador não capturou, ou uma troca que ganhava material.",
+      "description": "Oportunidade tática concreta deixada passar — uma captura que ganhava material, uma sequência forçada (garfo, cravada, ataque descoberto) que ganhava material em poucos lances, ou um xeque forçante.",
       "characteristics": [
-        "O melhor lance era uma captura que ganhava material",
-        "A peça capturada estava indefesa, ou valia mais que a peça capturante",
-        "O jogador optou por outro lance, abrindo mão do ganho material"
+        "O melhor lance era uma captura que ganhava material (troca vantajosa por SEE)",
+        "Ou a linha principal do engine ganhava pelo menos uma qualidade / dois peões em poucos lances",
+        "Ou o melhor lance era um xeque forçante",
+        "O jogador optou por outro lance, abrindo mão do ganho"
       ],
       "strategic_implications": "Indica falha de visão tática/atenção, não de compreensão estratégica. Treina-se com exercícios de tática e checagem sistemática de capturas e ameaças antes de cada lance.",
       "detection_key": "missed_tactic",
       "name_en": "Missed Tactic"
+    },
+    {
+      "id": "allowed_tactic",
+      "name": "Tática Permitida",
+      "silman_chapter": 1,
+      "silman_page": 26,
+      "silman_category": "tática",
+      "description": "O lance jogado entrega material: a melhor resposta do adversário inicia uma sequência (captura, garfo, cravada, xeque) que ganha pelo menos uma qualidade ou dois peões em poucos lances.",
+      "characteristics": [
+        "A linha de refutação do engine ganha material para o adversário",
+        "O problema foi criado pelo próprio lance (não era uma peça já pendurada antes)",
+        "Indica ausência de checagem das respostas forçantes do adversário"
+      ],
+      "strategic_implications": "Falha de verificação defensiva (blunder check), não de compreensão estratégica. Treina-se com o hábito de, antes de jogar, listar xeques, capturas e ameaças disponíveis para o adversário após o lance.",
+      "detection_key": "allowed_tactic",
+      "name_en": "Allowed Tactic"
     }
   ]
 }

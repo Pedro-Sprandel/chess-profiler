@@ -13,12 +13,16 @@ Pipeline de três camadas em sequência:
 ```
 Partidas (Chess.com API ou PGN)
   → [1] Detecção determinística   (position_analyzer.py — 17 conceitos Silman)
-  → [2] Validação quantitativa    (stockfish_validator.py — centipawns, cache SQLite)
+  → [2] Validação quantitativa    (stockfish_validator.py — ΔWinP, linhas do engine, cache SQLite)
+  → Atribuição erro → conceito     (attribution.py — tática primeiro, um conceito por erro;
+                                    error_classifier.py — IA só para o que as regras não explicam)
   → [3] Raciocínio causal          (ai_diagnostician.py — Claude classifica PRIMARY/SECONDARY/NOISE)
   → Perfil + Diagnóstico bilíngue (EN/PT) → Interface Streamlit
 ```
 
 Documentação detalhada da arquitetura, módulos e decisões de design: ver [CLAUDE.md](CLAUDE.md).
+Precisão da atribuição erro → conceito (medição antes/depois e ablação):
+[docs/precisao_atribuicao.md](docs/precisao_atribuicao.md).
 
 ## Requisitos
 
@@ -81,6 +85,9 @@ em `output/` são importados automaticamente pela interface.
 pytest                                # suíte completa
 pytest tests/test_position_analyzer.py -v
 pytest tests/test_pipeline_e2e.py -v  # integração real (requer Stockfish instalado)
+
+# Precisão da atribuição no conjunto de referência (requer Stockfish)
+python scripts/evaluate_precision.py --baseline data/gold_baseline.json --details
 ```
 
 ## Estrutura

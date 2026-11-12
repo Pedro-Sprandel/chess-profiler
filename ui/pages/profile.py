@@ -52,6 +52,13 @@ def render():
     cols[4].metric(t("profile.metric.missed_mates"), profile.get("total_missed_checkmates", 0), border=True)
     cols[5].metric(t("profile.metric.allowed_mates"), profile.get("total_allowed_checkmates", 0), border=True)
 
+    # Cobertura: quantos erros as regras explicam, quantos a IA inferiu, quantos não
+    # têm conceito (perfis antigos não têm o resumo).
+    summary = profile.get("attribution_summary")
+    if summary:
+        st.caption(t("profile.attribution", rule=summary.get("rule", 0),
+                     llm=summary.get("llm", 0), none=summary.get("unattributed", 0)))
+
     weaknesses = profile.get("weaknesses", [])
     if not weaknesses:
         st.write("")
@@ -77,6 +84,7 @@ def render():
             t("profile.col.total_occ"):  w["total_occurrences"],
             rate_col:                    round(w["error_rate"] * 100, 1),
             t("profile.col.avg_error"):  w["avg_error_magnitude_cp"],
+            t("profile.col.llm"):        w.get("llm_errors", 0),
         }
         for w in sorted(weaknesses, key=lambda x: x["error_occurrences"], reverse=True)
     ])

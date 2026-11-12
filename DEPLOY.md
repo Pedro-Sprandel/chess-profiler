@@ -17,6 +17,9 @@ reinícios ou em hospedagens gratuitas sem disco persistente.
 | `DATA_DIR` | não | Onde fica o cache do Stockfish (SQLite, regenerável). A imagem usa `/data`. |
 | `STOCKFISH_PATH` | não | Padrão `/usr/games/stockfish` na imagem. |
 | `ANTHROPIC_MODEL` | não | Troca o modelo (padrão `claude-opus-4-6`). |
+| `LLM_CLASSIFY_ERRORS` | não | `0` desliga o classificador LLM dos erros que as regras não explicam (padrão: ligado). |
+| `LLM_CLASSIFY_MAX_ERRORS` | não | Teto de erros enviados ao classificador por análise (padrão 60, ~US$0,25 no teto com o modelo padrão). |
+| `ANTHROPIC_CLASSIFIER_MODEL` | não | Modelo do classificador (padrão: o mesmo de `ANTHROPIC_MODEL`). |
 | `APP_PASSWORD` | legado | A antiga senha compartilhada; agora vale como `SIGNUP_CODE` se este não estiver definido. |
 
 ## Banco Postgres gratuito

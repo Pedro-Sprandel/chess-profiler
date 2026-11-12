@@ -17,7 +17,26 @@ class TestFenCache:
     def test_cache_roundtrip(self, db):
         db.cache_eval("8/8/8/8/8/8/8/8 w - - 0 1", 10, 55, "e2e4")
         cached = db.get_cached_eval("8/8/8/8/8/8/8/8 w - - 0 1", 10)
-        assert cached == {"score_cp": 55, "best_move": "e2e4"}
+        assert cached == {"score_cp": 55, "best_move": "e2e4", "pv": None}
+
+    def test_cache_stores_principal_variation(self, db):
+        db.cache_eval("fen-pv", 10, 30, "e2e4", ["e2e4", "e7e5", "g1f3"])
+        assert db.get_cached_eval("fen-pv", 10)["pv"] == ["e2e4", "e7e5", "g1f3"]
+        # A later write without a PV keeps the stored one.
+        db.cache_eval("fen-pv", 10, 31, "e2e4")
+        assert db.get_cached_eval("fen-pv", 10)["pv"] == ["e2e4", "e7e5", "g1f3"]
+
+    def test_old_cache_gains_pv_column(self, tmp_path):
+        import sqlite3
+        path = tmp_path / "old.db"
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE fen_cache (fen TEXT NOT NULL, depth INTEGER NOT NULL, "
+                     "score_cp INTEGER, best_move TEXT, analyzed_at TEXT, PRIMARY KEY (fen, depth))")
+        conn.execute("INSERT INTO fen_cache VALUES ('f', 10, 5, 'e2e4', NULL)")
+        conn.commit()
+        conn.close()
+        with Database(path) as old:
+            assert old.get_cached_eval("f", 10) == {"score_cp": 5, "best_move": "e2e4", "pv": None}
 
     def test_cache_is_depth_specific(self, db):
         db.cache_eval("fen-x", 10, 10, "a1a2")
@@ -26,7 +45,7 @@ class TestFenCache:
     def test_cache_upsert_overwrites(self, db):
         db.cache_eval("fen-y", 10, 10, "a1a2")
         db.cache_eval("fen-y", 10, 99, "b1b2")
-        assert db.get_cached_eval("fen-y", 10) == {"score_cp": 99, "best_move": "b1b2"}
+        assert db.get_cached_eval("fen-y", 10) == {"score_cp": 99, "best_move": "b1b2", "pv": None}
 
     def test_cache_stats_counts_entries(self, db):
         assert db.cache_stats()["cached_evals"] == 0

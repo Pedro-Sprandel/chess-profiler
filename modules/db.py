@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS fen_cache (
     depth       INTEGER NOT NULL,
     score_cp    INTEGER,
     best_move   TEXT,
+    pv          TEXT,
     analyzed_at TEXT    DEFAULT (datetime('now')),
     PRIMARY KEY (fen, depth)
 );
@@ -111,32 +112,47 @@ class Database:
         # for the lock instead of raising "database is locked".
         self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.executescript(SCHEMA)
+        # Caches criados antes da linha principal (PV) ser guardada.
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(fen_cache)")}
+        if "pv" not in cols:
+            self._conn.execute("ALTER TABLE fen_cache ADD COLUMN pv TEXT")
         self._conn.commit()
 
     # ── Stockfish evaluation cache ────────────────────────────────────────────
 
     def get_cached_eval(self, fen: str, depth: int) -> dict | None:
-        """Returns cached Stockfish result for (fen, depth), or None."""
+        """Returns cached Stockfish result for (fen, depth), or None.
+
+        "pv" is the principal variation as a list of UCI moves, or None for entries
+        cached before the PV was stored.
+        """
         row = self._conn.execute(
-            "SELECT score_cp, best_move FROM fen_cache WHERE fen = ? AND depth = ?",
+            "SELECT score_cp, best_move, pv FROM fen_cache WHERE fen = ? AND depth = ?",
             (fen, depth),
         ).fetchone()
         if row is None:
             return None
-        return {"score_cp": row["score_cp"], "best_move": row["best_move"]}
+        return {"score_cp": row["score_cp"], "best_move": row["best_move"],
+                "pv": row["pv"].split() if row["pv"] else None}
 
-    def cache_eval(self, fen: str, depth: int, score_cp: int, best_move: str | None):
-        """Inserts or replaces a Stockfish evaluation in the cache."""
+    def cache_eval(self, fen: str, depth: int, score_cp: int, best_move: str | None,
+                   pv: list[str] | None = None):
+        """Inserts or replaces a Stockfish evaluation in the cache.
+
+        pv: principal variation (UCI moves). A later write without a PV keeps the
+        one already stored.
+        """
         self._conn.execute(
             """
-            INSERT INTO fen_cache (fen, depth, score_cp, best_move)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO fen_cache (fen, depth, score_cp, best_move, pv)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(fen, depth) DO UPDATE SET
                 score_cp    = excluded.score_cp,
                 best_move   = excluded.best_move,
+                pv          = COALESCE(excluded.pv, fen_cache.pv),
                 analyzed_at = datetime('now')
             """,
-            (fen, depth, score_cp, best_move),
+            (fen, depth, score_cp, best_move, " ".join(pv) if pv else None),
         )
         self._conn.commit()
 

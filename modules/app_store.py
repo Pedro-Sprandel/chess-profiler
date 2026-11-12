@@ -6,6 +6,8 @@ Guarda o que não pode ser perdido num redeploy:
   sessions       : sessões de login (só o SHA-256 do token; o token fica no cookie).
   analyses       : uma linha por análise (perfil + diagnóstico), com dono (owner_id).
   explanations   : cache das respostas "Explicar este erro" (compartilhado, por posição).
+  error_labels   : cache do classificador LLM de erros sem conceito (por posição, lance
+                   e versão do prompt) — re-análises não pagam a API de novo.
   legacy_imports : arquivos output/*_profile.json já importados.
 
 Backends (escolhido em tempo de execução):
@@ -236,6 +238,15 @@ def _schema(pg: bool) -> list[str]:
             text        TEXT NOT NULL,
             created_at  TEXT,
             PRIMARY KEY (fen, move_played, concept_key, lang)
+        )""",
+        """CREATE TABLE IF NOT EXISTS error_labels (
+            fen            TEXT NOT NULL,
+            move_played    TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            model          TEXT,
+            label_json     TEXT NOT NULL,
+            created_at     TEXT,
+            PRIMARY KEY (fen, move_played, prompt_version)
         )""",
         """CREATE TABLE IF NOT EXISTS legacy_imports (
             name        TEXT PRIMARY KEY,
@@ -615,6 +626,29 @@ class AppStore:
             "ON CONFLICT (fen, move_played, concept_key, lang) DO UPDATE SET "
             "text = excluded.text, created_at = excluded.created_at",
             (fen, move_played or "", concept_key, lang, text, _now()),
+        )
+
+    # ── Rótulos do classificador LLM ──────────────────────────────────────────
+
+    def get_error_labels(self, keys: list[tuple[str, str]], prompt_version: str) -> dict:
+        """{(fen, move_played): label dict} para as chaves já classificadas."""
+        out = {}
+        for fen, move in keys:
+            row = self._one("SELECT label_json FROM error_labels "
+                            "WHERE fen = ? AND move_played = ? AND prompt_version = ?",
+                            (fen, move, prompt_version))
+            if row:
+                out[(fen, move)] = json.loads(row["label_json"])
+        return out
+
+    def save_error_label(self, fen: str, move_played: str, prompt_version: str,
+                         model: str, label: dict):
+        self._x(
+            "INSERT INTO error_labels (fen, move_played, prompt_version, model, label_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (fen, move_played, prompt_version) DO UPDATE SET "
+            "model = excluded.model, label_json = excluded.label_json, created_at = excluded.created_at",
+            (fen, move_played, prompt_version, model, json.dumps(label, ensure_ascii=False), _now()),
         )
 
     # ── Housekeeping ──────────────────────────────────────────────────────────
