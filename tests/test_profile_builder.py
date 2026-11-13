@@ -5,8 +5,13 @@ import pytest
 
 
 def make_position(concepts_detected: dict, is_error: bool, error_magnitude: float = 0.0, eval_before: int = 20) -> dict:
-    """Helper to build a position dict for games_data."""
-    return {
+    """Helper to build a position dict for games_data.
+
+    Error positions carry a precomputed attribution (the first detected concept), as
+    main._build_profile_phase does — these tests are about aggregation; the
+    attribution rules themselves are covered in test_attribution.py.
+    """
+    position = {
         "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
         "move_played": "e2e4",
         "concepts_detected": concepts_detected,
@@ -15,9 +20,13 @@ def make_position(concepts_detected: dict, is_error: bool, error_magnitude: floa
             "eval_before": eval_before,
             "eval_after": eval_before - error_magnitude,
             "error_magnitude": error_magnitude,
-            "best_move": None  # None bypasses is_instructive gate so profile tests stay focused
+            "best_move": None,
         }
     }
+    detected = [k for k, v in concepts_detected.items() if v.get("detected")]
+    if is_error and detected:
+        position["attribution"] = {"concept": detected[0], "source": "rule", "motif": "structural"}
+    return position
 
 
 def make_game(game_id: str, positions: list) -> dict:
@@ -341,7 +350,7 @@ class TestSamplePositionsStoreAll:
     def test_stores_all_error_positions_not_just_three(self):
         from modules.profile_builder import build_profile
         concepts = {"weak_square": {"detected": True}}
-        # 5 instructive errors for one concept (best_move None bypasses is_instructive)
+        # 5 attributed errors for one concept
         game = make_game("g1", [
             make_position(concepts, is_error=True, error_magnitude=100 + i)
             for i in range(5)
@@ -350,3 +359,42 @@ class TestSamplePositionsStoreAll:
         w = result["weaknesses"][0]
         assert w["error_occurrences"] == 5
         assert len(w["sample_positions"]) == 5
+
+
+class TestAttributionAggregation:
+    def test_errors_without_concept_are_counted_as_unattributed(self):
+        from modules.profile_builder import build_profile
+        # No attribution precomputed and no best move: the rules don't guess.
+        concepts = {"weak_square": {"detected": False}}
+        game = make_game("g1", [make_position(concepts, is_error=True, error_magnitude=100)] * 2)
+        result = build_profile([game])
+        assert result["attribution_summary"] == {"rule": 0, "llm": 0, "unattributed": 2}
+        assert result["weaknesses"] == []
+
+    def test_one_concept_per_error_and_source_split(self):
+        from modules.profile_builder import build_profile
+        concepts = {"weak_square": {"detected": True}, "open_file": {"detected": True}}
+        rule = make_position(concepts, is_error=True, error_magnitude=100)
+        llm = make_position(concepts, is_error=True, error_magnitude=100)
+        llm["attribution"] = {"concept": "weak_square", "source": "llm", "motif": "llm",
+                              "confidence": "high", "reason": {"en": "x", "pt": "y"}}
+        game = make_game("g1", [rule, rule, llm])
+        result = build_profile([game])
+        assert [w["concept"] for w in result["weaknesses"]] == ["weak_square"]
+        w = result["weaknesses"][0]
+        assert (w["error_occurrences"], w["rule_errors"], w["llm_errors"]) == (3, 2, 1)
+        assert result["attribution_summary"] == {"rule": 2, "llm": 1, "unattributed": 0}
+        sources = sorted(p["attribution"] for p in w["sample_positions"])
+        assert sources == ["llm", "rule", "rule"]
+        assert any(p["reason"] == {"en": "x", "pt": "y"} for p in w["sample_positions"])
+
+    def test_annotate_attributions_skips_mates_and_lists_unattributed(self):
+        from modules.profile_builder import annotate_attributions
+        concepts = {"weak_square": {"detected": False}}
+        mate = make_position(concepts, is_error=True, error_magnitude=200, eval_before=9500)
+        plain = make_position(concepts, is_error=True, error_magnitude=100)
+        ok = make_position(concepts, is_error=False)
+        game = {"game_id": "g1", "player_color": "white", "positions": [mate, plain, ok]}
+        unattributed = annotate_attributions([game])
+        assert [p for _, p in unattributed] == [plain]
+        assert "attribution" not in mate and "attribution" not in ok

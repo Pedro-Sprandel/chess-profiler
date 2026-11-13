@@ -453,3 +453,25 @@ class TestPerUserAnalyses:
         at.run()
         assert not at.exception
         assert at.session_state.active_profile is None
+
+
+class TestAttributionDisplay:
+    def test_llm_attribution_badge_and_coverage_caption(self):
+        import copy
+        profile = copy.deepcopy(SAMPLE_PROFILE)
+        profile["attribution_summary"] = {"rule": 5, "llm": 1, "unattributed": 2}
+        profile["weaknesses"][0]["llm_errors"] = 1
+        profile["weaknesses"][0]["sample_positions"][0].update({
+            "attribution": "llm", "motif": "llm", "confidence": "high",
+            "reason": {"en": "The knight takes over d5.", "pt": "O cavalo ocupa d5."},
+        })
+        _save("_llm", profile=profile, subject="x")
+        at = _app()
+        at.session_state["active_profile"] = "_llm"
+        at.session_state["lang"] = "pt"
+        at.run()
+        assert not at.exception
+        text = " ".join(m.value for m in at.markdown) + " ".join(c.value for c in at.caption)
+        assert "inferido pela IA" in text
+        assert "O cavalo ocupa d5." in text
+        assert "sem conceito: 2" in text

@@ -6,16 +6,18 @@ from modules.pgn_loader import load_games_from_file, iterate_positions
 from modules.chess_com_loader import fetch_recent_games
 from modules.position_analyzer import detect_concepts
 from modules.stockfish_validator import batch_validate, open_engine
-from modules.profile_builder import build_profile, save_profile, load_profile
+from modules.profile_builder import annotate_attributions, build_profile, save_profile, load_profile
+from modules.error_classifier import classify_unattributed
 from modules.ai_diagnostician import diagnose, load_silman_concepts
 from modules.app_store import AppStore
 from modules.db import Database
-from config import OUTPUT_DIR, STOCKFISH_DEPTH, OPENING_MOVES_TO_SKIP
+from config import OUTPUT_DIR, STOCKFISH_DEPTH, OPENING_MOVES_TO_SKIP, VALIDATE_ALL_POSITIONS
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Validation placeholder for positions without a detected concept (no Stockfish call).
-_NO_ERROR = {"is_error": False, "eval_before": None, "eval_after": None, "error_magnitude": 0, "best_move": None}
+_NO_ERROR = {"is_error": False, "eval_before": None, "eval_after": None, "error_magnitude": 0,
+             "best_move": None, "best_line": [], "refutation_line": []}
 
 
 def _emit(on_progress, stage, current, total, message):
@@ -88,8 +90,8 @@ def _opening_name(headers) -> str:
 
 def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKFISH_DEPTH) -> list:
     """
-    Analisa cada partida: detecta conceitos por posição e valida no Stockfish
-    apenas as posições com pelo menos um conceito detectado.
+    Analisa cada partida: detecta conceitos por posição e valida no Stockfish todas
+    as posições (VALIDATE_ALL_POSITIONS; senão, só as com conceito detectado).
 
     Os primeiros OPENING_MOVES_TO_SKIP lances completos são ignorados: são
     majoritariamente teoria de abertura, onde conceito detectado é ruído.
@@ -106,15 +108,15 @@ def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKF
         for i, (game, player_color) in enumerate(game_color_pairs):
             _emit(on_progress, "game", i, total, f"[main] Analyzing game {i + 1}/{total}...")
             game_positions = []
-            positions_with_concepts = []  # (original_index, board_before, move_played)
+            to_validate = []  # (original_index, board_before, move_played)
 
             for board_before, move_played, board_after in iterate_positions(game, player_color):
                 if board_before.fullmove_number <= OPENING_MOVES_TO_SKIP:
                     continue
                 concepts = detect_concepts(board_before, player_color)
                 pos_idx = len(game_positions)
-                if any(v.get("detected") for v in concepts.values()):
-                    positions_with_concepts.append((pos_idx, board_before.copy(), move_played))
+                if VALIDATE_ALL_POSITIONS or any(v.get("detected") for v in concepts.values()):
+                    to_validate.append((pos_idx, board_before.copy(), move_played))
                 game_positions.append({
                     "fen": board_before.fen(),
                     "move_number": board_before.fullmove_number,
@@ -123,8 +125,8 @@ def _process_games(game_color_pairs: list, on_progress=None, depth: int = STOCKF
                     "stockfish_validation": _NO_ERROR,
                 })
 
-            if positions_with_concepts:
-                idxs, boards, moves = zip(*positions_with_concepts)
+            if to_validate:
+                idxs, boards, moves = zip(*to_validate)
                 validations = batch_validate(list(zip(boards, moves)), engine=engine, depth=depth)
                 for idx, validation in zip(idxs, validations):
                     game_positions[idx]["stockfish_validation"] = validation
@@ -168,6 +170,17 @@ def _build_profile_phase(games_data: list, name: str, source: str, on_progress=N
         _persist_games_to_db(db, games_data, source=source)
         print(f"[main] {db.count_positions()} total positions in DB | cache: {db.cache_stats()['cached_evals']} evals")
 
+    # Atribui cada erro a no máximo um conceito (regras determinísticas); os que
+    # nenhuma regra explica vão para o classificador LLM (limitado e com cache).
+    _emit(on_progress, "profile", 0, 1, "[main] Attributing mistakes to concepts...")
+    unattributed = annotate_attributions(games_data)
+    llm_stats = classify_unattributed(unattributed, load_silman_concepts(), on_progress)
+    if llm_stats["candidates"]:
+        print(f"[main] Erros sem conceito pelas regras: {llm_stats['candidates']} | "
+              f"classificados pela IA: {llm_stats['accepted']} "
+              f"(cache {llm_stats['cached']}, enviados {llm_stats['sent']}, "
+              f"fora do teto/sem IA {llm_stats['skipped']})")
+
     # Constrói perfil de fraquezas
     _emit(on_progress, "profile", 0, 1, "[main] Building weakness profile...")
     profile = build_profile(games_data)
@@ -175,6 +188,7 @@ def _build_profile_phase(games_data: list, name: str, source: str, on_progress=N
         "player": subject or name,
         "source": source,
         "depth": depth,
+        "llm_classification": llm_stats,
     }
     with AppStore() as store:
         store.save_analysis(name, profile, subject=subject or name, source=source,

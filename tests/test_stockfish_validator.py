@@ -344,3 +344,71 @@ class TestErrorGuards:
         # Even a big swing: if the played move IS the best move, it's not an error.
         r = _classify(b, chess.Move.from_uci("e2e4"), 500, -500, chess.Move.from_uci("e2e4"))
         assert r["is_error"] is False
+
+
+class TestEngineLines:
+    """Linha principal e refutação guardadas para a camada tática (attribution.py)."""
+
+    @staticmethod
+    def _info(score_cp, pv):
+        info = {"score": MagicMock(), "pv": [chess.Move.from_uci(u) for u in pv]}
+        info["score"].white.return_value.score.return_value = score_cp
+        return info
+
+    def test_error_carries_best_line_and_refutation(self):
+        from modules.stockfish_validator import batch_validate
+        board = chess.Board()
+        move = chess.Move.from_uci("f2f3")
+        engine = MagicMock()
+        engine.analyse.side_effect = [
+            self._info(100, ["e2e4", "e7e5"]),                 # triagem: antes
+            self._info(-100, ["e7e5", "g1h3"]),                # triagem: depois
+            [self._info(100, ["e2e4", "e7e5", "g1f3"]),        # confirmação (multipv)
+             self._info(60, ["d2d4"])],
+            self._info(-100, ["e7e5", "g1h3", "d8h4"]),        # confirmação: depois
+        ]
+        with patch("modules.stockfish_validator._get_db", return_value=None), \
+             patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci",
+                   return_value=engine):
+            result = batch_validate([(board, move)], depth=10, confirm_depth=16)[0]
+        assert result["is_error"] is True
+        assert result["best_line"] == ["e2e4", "e7e5", "g1f3"]
+        assert result["refutation_line"] == ["e7e5", "g1h3", "d8h4"]
+
+    def test_lines_are_capped_at_pv_plies(self):
+        from config import PV_PLIES
+        from modules.stockfish_validator import validate_move
+        board = chess.Board()
+        long_pv = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6"]
+        engine = MagicMock()
+        engine.analyse.side_effect = [self._info(30, long_pv), self._info(20, long_pv[1:])]
+        with patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci",
+                   return_value=engine):
+            result = validate_move(board, chess.Move.from_uci("e2e4"))
+        assert result["best_line"] == long_pv[:PV_PLIES]
+
+    def test_cache_without_pv_is_reanalysed_when_lines_are_needed(self, tmp_path):
+        from modules.db import Database
+        from modules.stockfish_validator import batch_validate
+        board = chess.Board()
+        move = chess.Move.from_uci("f2f3")
+        after = board.copy()
+        after.push(move)
+        db = Database(tmp_path / "c.db")
+        # Entradas antigas (sem PV) nas duas profundidades.
+        for d in (10, 16):
+            db.cache_eval(board.fen(), d, 100, "e2e4")
+            db.cache_eval(after.fen(), d, -100, "e7e5")
+        engine = MagicMock()
+        engine.analyse.side_effect = [
+            [self._info(100, ["e2e4", "e7e5"]), self._info(60, ["d2d4"])],
+            self._info(-100, ["e7e5", "g1h3"]),
+        ]
+        with patch("modules.stockfish_validator._get_db", return_value=db), \
+             patch("modules.stockfish_validator.chess.engine.SimpleEngine.popen_uci",
+                   return_value=engine):
+            result = batch_validate([(board, move)], depth=10, confirm_depth=16)[0]
+        assert engine.analyse.call_count == 2  # só a confirmação, que precisa das linhas
+        assert result["best_line"] == ["e2e4", "e7e5"]
+        assert db.get_cached_eval(board.fen(), 16)["pv"] == ["e2e4", "e7e5"]
+        db.close()

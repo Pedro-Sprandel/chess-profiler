@@ -30,6 +30,8 @@ def _run_with_progress(fn, **kwargs):
             frac = 0.05 + 0.80 * ((current + 1) / max(total, 1))
         elif stage == "profile":
             frac = 0.87
+        elif stage == "classify":
+            frac = 0.89
         elif stage == "ai":
             frac = 0.93
         else:  # done

@@ -131,6 +131,17 @@ in terms of specific pieces, squares, and threats — and connect it to the conc
     return _create_message(client, prompt, max_tokens=600).strip()
 
 
+_PROMPT_SAMPLE_FIELDS = ("game_id", "move_number", "fen", "move_played", "best_move",
+                         "eval_before", "eval_after", "error_magnitude", "attribution", "motif")
+PROMPT_SAMPLES_PER_WEAKNESS = 8
+
+
+def _prompt_samples(positions: list) -> list:
+    top = sorted(positions, key=lambda p: -abs(p.get("error_magnitude") or 0))
+    return [{k: p.get(k) for k in _PROMPT_SAMPLE_FIELDS if p.get(k) is not None}
+            for p in top[:PROMPT_SAMPLES_PER_WEAKNESS]]
+
+
 def load_silman_concepts(path: str = "data/silman_concepts.json") -> dict:
     """
     Carrega a base de conhecimento do Silman e retorna um dict
@@ -166,7 +177,10 @@ def diagnose(player_profile: dict, silman_concepts: dict) -> dict:
         concept_key = weakness["concept"]
         silman_info = silman_concepts.get(concept_key, {})
         weaknesses_with_context.append({
-            **weakness,
+            **{k: v for k, v in weakness.items() if k != "sample_positions"},
+            # Só as posições de maior perda, com os campos úteis: mandar todas
+            # encarece o prompt sem mudar o diagnóstico.
+            "sample_positions": _prompt_samples(weakness.get("sample_positions", [])),
             "silman_name": silman_info.get("name", concept_key),
             "silman_chapter": silman_info.get("silman_chapter"),
             "silman_category": silman_info.get("silman_category"),
@@ -177,6 +191,7 @@ def diagnose(player_profile: dict, silman_concepts: dict) -> dict:
         "total_games": player_profile["total_games"],
         "total_positions_analyzed": player_profile["total_positions_analyzed"],
         "overall_error_rate": player_profile["overall_error_rate"],
+        "attribution_summary": player_profile.get("attribution_summary"),
         "weaknesses": weaknesses_with_context
     }
 
@@ -191,6 +206,14 @@ identifying causal patterns behind the detected symptoms.
 
 PLAYER DATA:
 {json.dumps(profile_summary, indent=2, ensure_ascii=False)}
+
+HOW THE DATA WAS BUILT:
+- Each confirmed mistake is attributed to at most one concept. Deterministic rules come
+  first (tactics, then the strategic concept with a concrete causal link); mistakes the
+  rules cannot explain may be labeled by an AI classifier. Per weakness, "rule_errors"
+  vs "llm_errors" and each sample's "attribution" ("rule" | "llm") say which; treat
+  AI-labeled evidence as weaker. attribution_summary.unattributed counts mistakes no
+  concept explains.
 
 INSTRUCTIONS:
 1. Analyze the weaknesses and identify whether a root pattern connects them

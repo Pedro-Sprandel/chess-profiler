@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import chess
 from config import MIN_OCCURRENCES, MAX_STAT_CP
-from modules.concept_relevance import is_instructive, is_missed_tactic, is_converted_tactic
+from modules.attribution import attribute_error, is_tactical_opportunity
 
 
 def _player_eval(validation: dict, key: str, player_color_bool: bool) -> float:
@@ -42,11 +42,51 @@ def _empty_stats() -> dict:
     }
 
 
+def is_mate_error(validation: dict, player_color_bool: bool) -> bool:
+    """Erro de mate perdido ou permitido — contado à parte, nunca atribuído a conceito."""
+    return (_is_missed_checkmate(validation, player_color_bool)
+            or _is_allowed_checkmate(validation, player_color_bool))
+
+
+def _attribution_for(position: dict, player_color_bool: bool) -> dict:
+    """A atribuição já calculada (main / classificador LLM) ou calculada agora."""
+    if position.get("attribution") is not None:
+        return position["attribution"]
+    fen = position.get("fen")
+    if not fen:
+        return {"concept": None, "source": None, "motif": None}
+    return attribute_error(chess.Board(fen), position.get("move_played"),
+                           position["stockfish_validation"],
+                           position.get("concepts_detected") or {}, player_color_bool)
+
+
+def annotate_attributions(games_data: list) -> list[tuple[dict, dict]]:
+    """Calcula e grava position["attribution"] em cada erro (exceto mates).
+
+    Retorna os pares (game, position) dos erros que ficaram sem conceito — os
+    candidatos ao classificador LLM (modules/error_classifier.py).
+    """
+    unattributed = []
+    for game in games_data:
+        color = game.get("player_color", "white") == "white"
+        for position in game["positions"]:
+            validation = position["stockfish_validation"]
+            if not validation.get("is_error") or is_mate_error(validation, color):
+                continue
+            position["attribution"] = _attribution_for(position, color)
+            if not position["attribution"].get("concept"):
+                unattributed.append((game, position))
+    return unattributed
+
+
 def _record_error(concept_stats: dict, concept_key: str, validation: dict,
-                  game: dict, position: dict):
+                  game: dict, position: dict, attribution: dict | None = None):
     """Credita uma ocorrência de erro a um conceito e guarda a posição de exemplo."""
+    attribution = attribution or {}
     stats = concept_stats.setdefault(concept_key, _empty_stats())
     stats["error_occurrences"] += 1
+    source = attribution.get("source") or "rule"
+    stats[f"{source}_errors"] = stats.get(f"{source}_errors", 0) + 1
     # Cap at MAX_STAT_CP so mate scores (≈10000 cp) don't skew the average
     stats["total_error_magnitude"] += min(validation["error_magnitude"], MAX_STAT_CP)
     stats["positions"].append({
@@ -63,6 +103,14 @@ def _record_error(concept_stats: dict, concept_key: str, validation: dict,
         "eval_before": validation.get("eval_before"),
         "eval_after": validation.get("eval_after"),
         "error_magnitude": validation["error_magnitude"],
+        # Origem da atribuição: "rule" (regras determinísticas) ou "llm" (inferida pelo
+        # classificador para erros que as regras não explicam). motif: o caminho da
+        # regra (capture/line/check/refutation/hanging/structural); reason: a
+        # justificativa curta do LLM.
+        "attribution": source,
+        "motif": attribution.get("motif"),
+        "confidence": attribution.get("confidence"),
+        "reason": attribution.get("reason"),
     })
 
 
@@ -81,13 +129,15 @@ def build_profile(games_data: list) -> dict:
     total_errors = 0
     total_missed_checkmates = 0
     total_allowed_checkmates = 0
+    attribution_counts = {"rule": 0, "llm": 0, "unattributed": 0}
 
     for game in games_data:
+        player_color_bool = game.get("player_color", "white") == "white"
         for position in game["positions"]:
             total_positions += 1
             validation = position["stockfish_validation"]
-            concepts = position["concepts_detected"]
-            player_color_bool = game.get("player_color", "white") == "white"
+            concepts = position.get("concepts_detected") or {}
+            validated = validation.get("eval_before") is not None
 
             if validation["is_error"]:
                 total_errors += 1
@@ -100,52 +150,40 @@ def build_profile(games_data: list) -> dict:
                     total_allowed_checkmates += 1
                     continue  # opponent delivering mate — not a strategic pattern
 
-                fen = position.get("fen")
-                move_played = position.get("move_played")
-                best_move = validation.get("best_move")
-                board = chess.Board(fen) if fen else None
-
-                # Tactical-first precedence: if the best move was a material-winning
-                # capture the player declined (e.g. an enemy piece left hanging), this
-                # is a tactical oversight, not a strategic one. Attribute it to the
-                # `missed_tactic` concept ONLY, so it doesn't leak into co-occurring
-                # strategic concepts (weak_square, king_safety, ...).
-                if board and is_missed_tactic(board, move_played, best_move, player_color_bool):
-                    _record_error(concept_stats, "missed_tactic", validation,
-                                  game, position)
+                # Cada erro vai para no máximo UM conceito (modules/attribution.py):
+                # táticas primeiro (perdida / peça pendurada / permitida / xeque),
+                # depois o conceito estratégico com vínculo causal mais forte.
+                attribution = _attribution_for(position, player_color_bool)
+                concept = attribution.get("concept")
+                if not concept:
+                    attribution_counts["unattributed"] += 1
                     continue
-
-                for concept_key, concept_data in concepts.items():
-                    if not concept_data.get("detected", False):
-                        continue
-
-                    # Gate the counter behind is_instructive — only count errors
-                    # that are causally linked to the concept (move type + score delta)
-                    if board and not is_instructive(board, move_played, best_move,
-                                                    concept_key, player_color_bool):
-                        continue
-
-                    # Store every instructive error position; the Game Explorer shows
-                    # one per game by default and "loads more" up to all of them.
-                    _record_error(concept_stats, concept_key, validation,
-                                  game, position)
+                attribution_counts[attribution.get("source") or "rule"] += 1
+                _record_error(concept_stats, concept, validation, game, position, attribution)
             else:
-                # Oportunidade tática convertida: o melhor lance era uma captura que
-                # ganhava material e o jogador a jogou. Alimenta o denominador do
+                # Oportunidade tática convertida: o melhor lance era tático (ganhava
+                # material ou dava xeque) e o jogador o jogou. Alimenta o denominador do
                 # missed_tactic para a taxa de erro dele significar algo (perdidas /
                 # oportunidades), em vez de ficar ~100% por construção.
                 fen = position.get("fen")
-                board = chess.Board(fen) if fen else None
-                if board and is_converted_tactic(board, position.get("move_played"),
-                                                 validation.get("best_move"),
-                                                 player_color_bool):
+                best_move = validation.get("best_move")
+                if (fen and best_move and position.get("move_played") == best_move
+                        and is_tactical_opportunity(chess.Board(fen), best_move,
+                                                    validation.get("best_line"),
+                                                    player_color_bool)):
                     stats = concept_stats.setdefault("missed_tactic", _empty_stats())
                     stats["total_occurrences"] += 1
 
+                # Tática permitida: toda posição avaliada sem erro é uma oportunidade
+                # de não entregar material — a taxa vira "lances que entregam material".
+                if validated:
+                    stats = concept_stats.setdefault("allowed_tactic", _empty_stats())
+                    stats["total_occurrences"] += 1
+
                 # Nota metodológica: o denominador (total_occurrences) conta toda
-                # posição correta com o conceito presente, sem o gate causal de
-                # is_instructive — que só é definível quando houve erro. A taxa de
-                # erro é portanto conservadora (denominador amplo, numerador gated).
+                # posição correta com o conceito presente, sem o gate causal — que só é
+                # definível quando houve erro. A taxa de erro é portanto conservadora
+                # (denominador amplo, numerador com vínculo causal).
                 for concept_key, concept_data in concepts.items():
                     if concept_data.get("detected", False):
                         stats = concept_stats.setdefault(concept_key, _empty_stats())
@@ -164,6 +202,8 @@ def build_profile(games_data: list) -> dict:
                 "error_occurrences": stats["error_occurrences"],
                 "error_rate": round(error_rate, 3),
                 "avg_error_magnitude_cp": round(avg_error, 1),
+                "rule_errors": stats.get("rule_errors", 0),
+                "llm_errors": stats.get("llm_errors", 0),
                 # Store every error position so the Game Explorer can show one per game
                 # by default and "load more" up to all of them.
                 "sample_positions": stats["positions"]
@@ -178,6 +218,8 @@ def build_profile(games_data: list) -> dict:
         "total_errors_detected": total_errors,
         "total_missed_checkmates": total_missed_checkmates,
         "total_allowed_checkmates": total_allowed_checkmates,
+        # Erros por origem da atribuição; "unattributed" = nenhum conceito os explica.
+        "attribution_summary": attribution_counts,
         "overall_error_rate": round(total_errors / total_positions, 3) if total_positions > 0 else 0,
         "weaknesses": weaknesses
     }

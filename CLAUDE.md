@@ -20,10 +20,17 @@ Partidas (Chess.com API ou PGN) — primeiros OPENING_MOVES_TO_SKIP lances ignor
     + conceito tático derivado (missed_tactic) por gate de precedência
         ↓
 [2] Validação quantitativa — stockfish_validator.py
-    Duas passadas: triagem (STOCKFISH_DEPTH) + confirmação dos erros
-    (STOCKFISH_CONFIRM_DEPTH, MultiPV=2). Erro = queda de probabilidade de
+    Todas as posições. Duas passadas: triagem (STOCKFISH_DEPTH) + confirmação dos
+    erros (STOCKFISH_CONFIRM_DEPTH, MultiPV=2). Erro = queda de probabilidade de
     vitória (ΔWinP, modelo Lichess) acima do threshold + piso em centipawns.
+    Guarda a linha principal e a refutação do lance jogado (PV_PLIES lances).
     Cache SQLite evita re-análise de posições já vistas
+        ↓
+[2b] Atribuição erro → conceito — attribution.py (+ error_classifier.py)
+    Cada erro vai para no máximo UM conceito: tática perdida / peça pendurada /
+    tática permitida / xeque forçante, depois o conceito estratégico com vínculo
+    causal (localidade, captura na casa do conceito, fase, limiar). O que nenhuma
+    regra explica vai, limitado e com cache, a um classificador LLM (origem "llm")
         ↓
 [3] Raciocínio causal — ai_diagnostician.py
     Claude classifica fraquezas em PRIMARY/SECONDARY/NOISE
@@ -51,14 +58,18 @@ v1/
 ├── requirements.txt
 ├── .env                            ← ANTHROPIC_API_KEY (não versionado)
 ├── data/
-│   ├── silman_concepts.json        ← base de conhecimento: 18 conceitos (17 estratégicos + missed_tactic)
+│   ├── silman_concepts.json        ← base de conhecimento: 19 conceitos (17 estratégicos + missed_tactic + allowed_tactic)
+│   ├── gold_attributions.json      ← conjunto de referência: 183 erros reais, 38 com veredito humano
+│   ├── gold_baseline.json          ← atribuições do código anterior (ea61a7e) nesse conjunto
 │   └── profiler.db                 ← SQLite: cache Stockfish, posições, resultados (+ dados de usuário sem DATABASE_URL)
 ├── modules/
 │   ├── pgn_loader.py               ← carrega partidas de arquivo ou string PGN
 │   ├── chess_com_loader.py         ← busca N partidas recentes via API Chess.com
 │   ├── position_analyzer.py        ← 17 detectores de conceitos (retornam dicts tipados)
 │   ├── stockfish_validator.py      ← validação em batch com cache SQLite
-│   ├── concept_relevance.py        ← filtra posições instrutivas (3 gates causais)
+│   ├── concept_relevance.py        ← placar por conceito, limiares, SEE de captura (usado por attribution)
+│   ├── attribution.py              ← erro → no máximo um conceito (tática por linha + filtros causais)
+│   ├── error_classifier.py         ← LLM para erros sem conceito (ficha determinística, teto, cache)
 │   ├── profile_builder.py          ← acumula fraquezas longitudinalmente
 │   ├── ai_diagnostician.py         ← prompt Claude + parse JSON bilíngue estruturado
 │   ├── db.py                       ← cache local SQLite (fen_cache, positions, analysis_results)
@@ -82,7 +93,10 @@ v1/
 │       ├── profile.py              ← dashboard de métricas + gráficos
 │       ├── explorer.py             ← tabuleiro SVG com setas de lance/melhor lance
 │       └── diagnosis.py            ← causa raiz, classificação, plano de estudo
-├── tests/                          ← 349 testes (ver tabela na seção Testes)
+├── scripts/
+│   ├── build_gold_set.py           ← gera data/gold_attributions.json a partir de docs/
+│   └── evaluate_precision.py       ← precisão da atribuição no conjunto de referência (Stockfish)
+├── tests/                          ← 388 testes (ver tabela na seção Testes)
 └── output/                         ← exportação JSON da CLI ({user}_profile.json, etc.)
 ```
 
@@ -111,6 +125,12 @@ DB_POOL_MAX = 5               # conexões no pool Postgres por processo
 SESSION_TTL_DAYS = 30         # duração do login (cookie cp_session)
 ALLOW_SIGNUP = True           # env ALLOW_SIGNUP=0 fecha o cadastro pela UI
 SIGNUP_CODE = None            # código de convite para criar conta (fallback: APP_PASSWORD)
+PV_PLIES = 6                  # meios-lances guardados da linha principal / refutação
+VALIDATE_ALL_POSITIONS = True # Stockfish em todas as posições (não só as com conceito)
+TACTIC_LINE_GAIN_CP = 200     # ganho de material na linha que torna o erro tático
+ANTHROPIC_CLASSIFIER_MODEL = ANTHROPIC_MODEL  # env override
+LLM_CLASSIFY_ERRORS = True    # env LLM_CLASSIFY_ERRORS=0 desliga o classificador
+LLM_CLASSIFY_MAX_ERRORS = 60  # teto de erros classificados pelo LLM por análise
 
 # config.validate_stockfish_path() valida existência/execução do binário (chamada por open_engine())
 ```
@@ -142,7 +162,7 @@ python eval_fen.py "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 python eval_fen.py "<FEN>" --depth 15 --json
 
 # Testes
-pytest                          # 349 testes, todos passando
+pytest                          # 388 testes, todos passando
 TEST_DATABASE_URL=postgresql://localhost/chess_test pytest   # mesma suíte contra Postgres real
 
 # Contas (mesmo banco da UI)
@@ -151,6 +171,10 @@ python manage.py import-sqlite data/profiler.db --owner ana   # SQLite → Postg
 pytest -v --tb=short
 pytest tests/test_position_analyzer.py -v
 pytest tests/test_pipeline_e2e.py -v   # requer Stockfish instalado
+
+# Precisão da atribuição erro → conceito (requer Stockfish)
+python scripts/build_gold_set.py
+python scripts/evaluate_precision.py --baseline data/gold_baseline.json --details
 ```
 
 ---
@@ -244,9 +268,13 @@ batch_validate(positions: list[tuple], engine=None, depth=STOCKFISH_DEPTH,
 # Duas passadas: triagem em `depth` + confirmação dos erros em `confirm_depth`
 # (default STOCKFISH_CONFIRM_DEPTH). A confirmação usa MultiPV=2: se o lance
 # jogado era a 2ª melhor opção com gap ≤ 50cp, não é erro (posição difícil).
-# Cache SQLite por (fen, depth) consultado em ambas as passadas.
+# Cache SQLite por (fen, depth) consultado em ambas as passadas; guarda também a PV
+# (entradas antigas sem PV são re-analisadas quando as linhas são necessárias).
 # Retorna: {is_error, eval_before, eval_after, error_magnitude, delta_winp,
-#           involves_mate, best_move}
+#           involves_mate, best_move, best_line, refutation_line}
+# best_line: PV a partir da posição (começa no melhor lance); refutation_line: PV
+# após o lance jogado (começa na melhor resposta do adversário). Até PV_PLIES lances,
+# garantidas nos erros.
 
 evaluate_fen(fen: str, depth: int = STOCKFISH_DEPTH, use_cache: bool = True) -> dict
 # {score_cp, score_side, is_mate, mate_in, best_move, depth, turn}
@@ -279,6 +307,11 @@ ganhadora que era o melhor lance. Alimenta o denominador (`total_occurrences`) d
 conceito `missed_tactic`, fazendo a taxa de erro significar "táticas perdidas /
 oportunidades táticas" em vez de ~100% por construção.
 
+`is_instructive()` / `is_missed_tactic()` / `is_converted_tactic()` são a versão anterior
+da atribuição e não são mais chamadas por `build_profile()` (ficam pelos testes e pela
+linha de base); `modules/attribution.py` reaproveita `_concept_score`, os limiares
+(`CONCEPT_SCORE_THRESHOLD`), `CONCEPT_REQUIRED_PIECE` e `_is_material_winning_capture`.
+
 `is_instructive()` — três gates em ordem de custo crescente:
 1. O jogador não jogou o melhor lance
 2. O melhor lance envolve o tipo de peça relevante para o conceito (ex: torre para `open_file`)
@@ -291,14 +324,57 @@ Scoring para os novos conceitos:
 - `backward_pawn`: `-count`
 - `center_control`: `advantage` (ataques do jogador − ataques do adversário nos 4 centros)
 
+### `modules/attribution.py`
+```python
+attribute_error(board, move_played_uci, validation, concepts_before, player_color) -> dict
+# {"concept": str|None, "source": "rule"|None, "motif": str|None, "gain_cp": int|None}
+line_material_gain(board, line, color) -> int        # material ganho ao longo de uma PV
+allowed_tactic_gain(board, move_played, refutation_line, player_color) -> int
+is_tactical_opportunity(board, best_move_uci, best_line, player_color) -> bool
+structural_candidates(board, played, best, concepts_before, player_color) -> [(conceito, razão)]
+```
+Cascata (o primeiro que se aplica leva o erro, e só ele):
+1. `missed_tactic` — melhor lance é captura vantajosa (SEE) ou a linha principal ganha
+   ≥ `TACTIC_LINE_GAIN_CP` para o jogador (motivo `capture` / `line`);
+2. `hanging_piece` — peça do jogador pendurada e o melhor lance a salva (`hanging`);
+3. `allowed_tactic` — a refutação do lance jogado ganha ≥ `TACTIC_LINE_GAIN_CP` para o
+   adversário (`refutation`);
+4. `missed_tactic` — melhor lance é xeque (`check`);
+5. conceito estratégico (`structural`), o de maior ganho/limiar entre os que passam em:
+   não é final para `space_advantage`/`center_control`; tipo de peça
+   (`CONCEPT_REQUIRED_PIECE` + espaço exige peão); melhor lance não é xeque; captura só
+   na casa do conceito; localidade (`relevant_squares` + `_touches`: sai de, chega a ou
+   ataca as casas apontadas pelo detector); ganho de placar ≥ limiar;
+6. nada → sem conceito (candidato ao classificador LLM). Na dúvida, não atribui.
+
+Medição em `docs/precisao_atribuicao.md` (coerentes 18/18 mantidos, falsos positivos
+8/8 removidos, precisão julgada 70% → 91%; filtro de persistência na PV testado e
+descartado).
+
+### `modules/error_classifier.py`
+```python
+fact_sheet(item_id, game, position) -> dict   # fatos determinísticos (SAN, linhas, material, conceitos)
+classify_unattributed(pairs, silman_concepts, on_progress=None, client=None) -> stats
+# stats: {"candidates", "cached", "sent", "accepted", "skipped"}
+```
+Erros sem conceito, maior perda primeiro, até `LLM_CLASSIFY_MAX_ERRORS`; lotes de 20
+com o catálogo num bloco de sistema `cache_control`; lista fechada (19 conceitos +
+`none`); aceita só confiança high/medium; grava `position["attribution"]` com
+`source="llm"` e `reason={"en","pt"}`. Cache em `AppStore.error_labels` por
+(fen, lance, `PROMPT_VERSION`). Sem chave/desligado/falha → segue sem classificar.
+
 ### `modules/profile_builder.py`
 ```python
+annotate_attributions(games_data) -> [(game, position)]   # grava position["attribution"]; devolve os sem conceito
 build_profile(games_data: list) -> dict
 # games_data: lista de dicts com game_id, white, black, player_color, positions
-# Cada position precisa de concepts_detected e stockfish_validation.
-# Precedência tática: se is_missed_tactic() é True, o erro vai SÓ para o conceito
-#   missed_tactic e não é avaliado contra os conceitos estratégicos.
-# Caso contrário, só conta um erro para um conceito se is_instructive() retornar True.
+# Cada position precisa de concepts_detected e stockfish_validation (e, opcionalmente,
+# attribution já calculada — senão é calculada aqui com attribute_error()).
+# Mates perdidos/permitidos são contados à parte e nunca atribuídos.
+# Cada erro credita no máximo UM conceito; os sem conceito entram em
+#   attribution_summary["unattributed"].
+# Denominadores: missed_tactic conta oportunidades táticas convertidas
+#   (is_tactical_opportunity); allowed_tactic conta toda posição avaliada.
 # Fraqueza só entra no perfil se error_occurrences >= MIN_OCCURRENCES (default: 3).
 # error_magnitude é capeada em MAX_STAT_CP=500 para avg_error_magnitude_cp.
 # (_record_error() é o helper interno que credita a ocorrência e guarda a posição.)
@@ -317,6 +393,7 @@ Estrutura de retorno do perfil:
   "total_errors_detected": int,
   "total_missed_checkmates": int,
   "total_allowed_checkmates": int,
+  "attribution_summary": {"rule": int, "llm": int, "unattributed": int},
   "overall_error_rate": float,
   "weaknesses": [
     {
@@ -325,6 +402,7 @@ Estrutura de retorno do perfil:
       "error_occurrences": int,
       "error_rate": float,
       "avg_error_magnitude_cp": float,
+      "rule_errors": int, "llm_errors": int,
       "sample_positions": [
         {
           "game_id": str, "white": str, "black": str,
@@ -332,15 +410,18 @@ Estrutura de retorno do perfil:
           "game_url": str, "date": str, "move_number": int,
           "fen": str, "move_played": str, "best_move": str,
           "eval_before": int, "eval_after": int,
-          "error_magnitude": float
+          "error_magnitude": float,
+          "attribution": "rule"|"llm", "motif": str, "confidence": str|null,
+          "reason": {"en": str, "pt": str}|null
         }
       ]
     }
   ]
 }
 ```
-(`metadata` é adicionado por `main._build_profile_phase`; os campos novos de
-`sample_positions` são opcionais — perfis antigos sem eles continuam funcionando.)
+(`metadata` é adicionado por `main._build_profile_phase`, com `llm_classification`
+= stats do classificador; os campos novos de `sample_positions` e o
+`attribution_summary` são opcionais — perfis antigos sem eles continuam funcionando.)
 
 ### `modules/ai_diagnostician.py`
 ```python
@@ -354,6 +435,10 @@ Modelo e limite de tokens vêm de `config.py` (`ANTHROPIC_MODEL = "claude-opus-4
 `ANTHROPIC_MAX_TOKENS = 8192`). A chamada à API tem retry com backoff exponencial em
 erros transitórios (rate limit / 5xx / conexão) e extração robusta de JSON via
 `_extract_json()`. Levanta `RuntimeError` se `ANTHROPIC_API_KEY` não estiver definida.
+
+O prompt leva, por fraqueza, só as `PROMPT_SAMPLES_PER_WEAKNESS = 8` posições de maior
+perda (campos essenciais), o `attribution_summary` e a instrução de tratar a evidência
+`llm` como mais fraca.
 
 O diagnóstico é retornado em formato **bilíngue** via uma única chamada à API:
 
@@ -485,7 +570,8 @@ Sequência interna:
    `detect_concepts()` em cada posição → `batch_validate()` (duas passadas)
    apenas nas posições com pelo menos um conceito detectado
 4. Persiste posições/resultados no SQLite local via `_persist_games_to_db()` (com dedupe)
-5. `build_profile()` — aplica `is_instructive()` como gate causal; adiciona
+5. `annotate_attributions()` (regras) → `classify_unattributed()` (LLM, só o que sobrou)
+   → `build_profile()` agrega por conceito (um conceito por erro); adiciona
    `generated_at`; `_build_profile_phase` anexa `metadata` (player/source/depth) e
    grava em `analyses` (`AppStore.save_analysis`, com `owner_id`)
 6. `diagnose()` — chama Claude, retorna diagnóstico bilíngue, gravado com `AppStore.save_diagnosis`
@@ -498,7 +584,7 @@ Todas as funções de análise aceitam `owner_id` (a UI passa a conta logada; a 
 persistência dela. `run_diagnosis(name)` lê o perfil do banco (fallback: JSON).
 
 `on_progress(stage, current, total, message)` — callback opcional para a UI do Streamlit
-exibir progresso. Stages: `"fetch"`, `"load"`, `"game"`, `"profile"`, `"ai"`, `"done"`.
+exibir progresso. Stages: `"fetch"`, `"load"`, `"game"`, `"profile"`, `"classify"`, `"ai"`, `"done"`.
 
 ---
 
@@ -552,7 +638,7 @@ Na primeira execução da sessão, `ui/store.ensure_legacy_imported()` migra os 
 ```python
 t("chave")                # retorna string no idioma atual (st.session_state.lang)
 t("chave", param=valor)   # com interpolação
-# 180 chaves, EN e PT-BR simétricas
+# 191 chaves, EN e PT-BR simétricas
 # Idioma: st.radio com key="lang" → persiste em session_state
 ```
 
@@ -567,6 +653,9 @@ Toda a UI (tabela, gráficos, explorer) usa `concept_label()` em vez de
 
 **Melhorias da UI:**
 - Analyze: formulário + tabela "Análises salvas" (clique numa linha abre a análise).
+- Explorer: linha "Por que este conceito" (regra que decidiu, ou selo "inferido pela IA"
+  com a justificativa do classificador); Profile: legenda de cobertura (regras / IA / sem
+  conceito) e coluna "Inferidos pela IA".
 - Explorer: lances em SAN (`board.san`), número do lance, avaliação antes→depois,
   oponente no título do expander, link para a partida no Chess.com (`game_url`);
   "Explicar este erro" fica salvo na tabela `explanations` (sobrevive a recarregar).
@@ -590,8 +679,8 @@ compatível com `db.py` (`insert_positions_bulk`).
 
 ## Base de Conhecimento (`data/silman_concepts.json`)
 
-18 conceitos: 17 estratégicos extraídos manualmente de *The Amateur's Mind* + 1 tático
-derivado (`missed_tactic`). Cada entrada:
+19 conceitos: 17 estratégicos extraídos manualmente de *The Amateur's Mind* + 2 táticos
+derivados (`missed_tactic`, `allowed_tactic`). Cada entrada:
 ```json
 {
   "id": "weak_square",
@@ -614,15 +703,19 @@ Conceito tático derivado (atribuído por gate de precedência, não por detecto
 - `missed_tactic` — "Tática Perdida", cap. 1 p. 26, categoria tática. Captura erros em
   que o jogador deixou passar uma captura que ganhava material (ex.: peça pendurada do
   adversário). Antes, esses erros vazavam para conceitos estratégicos (tipicamente
-  `weak_square`) por co-ocorrência. A taxa de erro desse conceito tende a ~100% pois
-  ele só é registrado quando há erro (não acumula `total_occurrences` de posições corretas).
+  `weak_square`) por co-ocorrência. Hoje cobre também ganhos de material na linha
+  principal do engine e xeques forçantes; o denominador são as oportunidades táticas
+  convertidas.
+- `allowed_tactic` — "Tática Permitida", cap. 1 p. 26, categoria tática. O lance jogado
+  entrega material: a refutação do engine ganha ≥ 200 cp para o adversário. Denominador:
+  toda posição avaliada.
 
 ---
 
 ## Testes
 
 ```bash
-pytest                                  # 349 testes, todos passando
+pytest                                  # 388 testes, todos passando
 TEST_DATABASE_URL=postgresql://... pytest  # AppStore contra Postgres real (tabelas recriadas por teste)
 pytest -v --tb=short
 pytest tests/test_position_analyzer.py  # 78 testes com FENs conhecidas
@@ -634,20 +727,22 @@ Cobertura por arquivo:
 | Arquivo | Testes | Escopo |
 |---------|--------|--------|
 | `test_position_analyzer.py` | 78 | FENs específicas para os 17 detectores + `static_exchange_gain` (SEE) |
-| `test_profile_builder.py` | 27 | Checkmates; precedência `missed_tactic`; denominador de oportunidades |
-| `test_stockfish_validator.py` | 23 | Mock `popen_uci`, cache, guards ΔWinP, passada de confirmação/MultiPV |
+| `test_profile_builder.py` | 30 | Checkmates; precedência `missed_tactic`; denominador; um conceito por erro; origem rule/llm |
+| `test_attribution.py` | 17 | Material na linha, tática perdida/permitida, xeque, filtros estruturais com posições julgadas |
+| `test_error_classifier.py` | 12 | Ficha determinística, teto, lotes, cache, rótulos rejeitados, falha da API (mock) |
+| `test_stockfish_validator.py` | 26 | Mock `popen_uci`, cache, guards ΔWinP, confirmação/MultiPV, linhas do engine |
 | `test_concept_relevance.py` | 20 | Gates causais, scoring, `is_missed_tactic`/`is_converted_tactic` via SEE |
 | `test_chess_com_loader.py` | 16 | Mock HTTP, detecção de cor, limite n_games |
-| `test_app.py` | 34 | AppTest: startup, i18n, estado vazio, exclusão, diagnóstico ausente; login/cadastro/convite, cookie, logout, sessão revogada, isolamento entre contas |
+| `test_app.py` | 35 | AppTest: startup, i18n, estado vazio, exclusão, diagnóstico ausente; login/cadastro/convite, cookie, logout, sessão revogada, isolamento entre contas |
 | `test_app_store.py` | 40 | Contas, hash, bloqueio, sessões, troca/reset de senha, análises por dono, órfãs, migração de banco antigo |
 | `test_manage.py` | 6 | `manage.py`: contas e `import-sqlite` |
 | `test_ai_diagnostician.py` | 14 | Mock cliente Anthropic, formato bilíngue EN/PT |
 | `test_pipeline_e2e.py` | 13 | Integração real Stockfish; `@skip_no_sf` se binário ausente |
-| `test_db.py` | 12 | Cache, posições, `find_position`, resultados |
+| `test_db.py` | 14 | Cache (com PV e migração), posições, `find_position`, resultados |
 | `test_analysis_store.py` | 9 | Importação de JSON legados (idempotente, não reimporta excluídos, dono) |
 | `test_pgn_loader.py` | 11 | Parsing PGN, iteração de posições |
 | `test_cli.py` | 14 | `_main(argv=...)`, roteamento pgn vs username, flags, `--owner` |
-| `test_main.py` | 13 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games`; `owner_id` |
+| `test_main.py` | 14 | Mocks de `batch_validate`, `detect_concepts`, `diagnose`, `fetch_recent_games`; `owner_id` |
 | `test_diagnosis_card.py` | 6 | `format_root_cause`, `format_weakness_table`, `format_study_priority` |
 | `test_weakness_chart.py` | 6 | Figuras Plotly, ordenação, lista vazia |
 | `test_config.py` | 4 | Valores e tipos dos thresholds |
@@ -709,3 +804,9 @@ um jogador ~500.
 - Login com contas individuais e persistência durável: dados de usuário (contas, sessões,
   análises) separados do cache computacional — os primeiros num banco relacional
   gerenciado (PostgreSQL), o segundo em SQLite local regenerável
+- Atribuição erro → conceito com precedência tática baseada nas linhas do engine (ganho
+  de material ao longo da PV, refutação do lance jogado) e um conceito por erro; medida
+  num conjunto de referência derivado da validação qualitativa
+  (`docs/precisao_atribuicao.md`), com ablação dos filtros
+- Cobertura dos erros sem conceito por um classificador LLM que escolhe sobre fatos
+  calculados (não lê o tabuleiro), com origem marcada e custo limitado

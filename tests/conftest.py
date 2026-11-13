@@ -17,7 +17,7 @@ import modules.app_store
 import modules.db
 import modules.stockfish_validator
 
-_APP_TABLES = ("sessions", "analyses", "explanations", "legacy_imports", "users")
+_APP_TABLES = ("sessions", "analyses", "explanations", "error_labels", "legacy_imports", "users")
 
 
 def _reset_postgres(url: str):
@@ -40,6 +40,9 @@ def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(modules.app_store, "PBKDF2_ITERATIONS", 1_000)
     monkeypatch.setattr(config, "ALLOW_SIGNUP", True)
     monkeypatch.setattr(config, "SIGNUP_CODE", None)
+    # Never call the real API from tests: the error classifier is off unless a test
+    # turns it on (with a mocked client).
+    monkeypatch.setattr(config, "LLM_CLASSIFY_ERRORS", False)
 
     pg_url = os.getenv("TEST_DATABASE_URL")
     monkeypatch.setattr(config, "DATABASE_URL", pg_url or None)

@@ -9,7 +9,7 @@ from modules.ai_diagnostician import explain_position
 from ui.concepts import concept_label
 from ui.i18n import t
 from ui.store import get_analysis, get_explanation, save_explanation
-from ui.style import ERROR, GOOD, INK, MUTED, anchor, section_header, swatch
+from ui.style import ERROR, GOOD, INK, MUTED, WARN, anchor, badge, section_header, swatch
 
 BOARD_COLORS = {
     "square light": "#C9D2D9",
@@ -113,6 +113,17 @@ def _details_html(pos: dict, fen: str, move_played, best_move) -> str:
         rows.append((t("explorer.eval_swing"),
                      f"{_fmt_eval(pos['eval_before'])} → {_fmt_eval(pos['eval_after'])}"))
     rows.append((t("explorer.error_cp"), f"−{_fmt_cp(pos.get('error_magnitude'))} cp"))
+    # Origem da atribuição deste erro ao conceito: regra determinística ou IA.
+    if pos.get("attribution") == "llm":
+        reason = pos.get("reason") or {}
+        lang = st.session_state.get("lang", "pt")
+        text = reason.get(lang) or reason.get("en") or reason.get("pt") or ""
+        value = badge(t("explorer.attr.llm"), WARN)
+        if text:
+            value += f'<div style="margin-top:.3rem">{escape(text)}</div>'
+        rows.append((t("explorer.attr"), value))
+    elif pos.get("motif"):
+        rows.append((t("explorer.attr"), escape(t(f"explorer.motif.{pos['motif']}"))))
     body = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows)
     return f'<table class="cp-kv">{body}</table>'
 

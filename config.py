@@ -16,6 +16,14 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-6")
 ANTHROPIC_MAX_TOKENS = 8192
 
+# Classificador LLM dos erros que nenhuma regra explica (modules/error_classifier.py).
+# Mesmo modelo do diagnóstico, salvo override. O teto limita o gasto por análise: os
+# erros de maior perda vão primeiro; o resto fica "sem conceito". Desligue com
+# LLM_CLASSIFY_ERRORS=0.
+ANTHROPIC_CLASSIFIER_MODEL = os.getenv("ANTHROPIC_CLASSIFIER_MODEL") or ANTHROPIC_MODEL
+LLM_CLASSIFY_ERRORS = os.getenv("LLM_CLASSIFY_ERRORS", "1").strip().lower() not in ("0", "false", "no", "off")
+LLM_CLASSIFY_MAX_ERRORS = int(os.getenv("LLM_CLASSIFY_MAX_ERRORS", "60"))
+
 # ── Persistência ──────────────────────────────────────────────────────────────
 # DATA_DIR: quando definido (ex.: volume montado em /data no deploy), o banco e os
 # perfis ficam sob ele — assim sobrevivem a redeploys. Sem ele, mantém o layout
@@ -57,6 +65,21 @@ STOCKFISH_DEPTH = 10
 # são re-validados nesta profundidade para eliminar falsos positivos de horizonte.
 # Só roda sobre os lances já marcados como erro (~fração pequena das posições).
 STOCKFISH_CONFIRM_DEPTH = 16
+
+# Quantos lances (meios-lances) da linha principal do Stockfish guardar por posição.
+# A camada tática e os filtros de precisão (modules/attribution.py) olham essa
+# distância à frente: ganhos de material ao longo da linha, persistência do efeito.
+PV_PLIES = 6
+
+# Ganho mínimo de material (cp) ao longo da linha do engine para um erro ser tático:
+# o melhor lance ganhava isso para o jogador (tática perdida) ou o lance jogado
+# entrega isso ao adversário (tática permitida). 200 = uma qualidade ou dois peões.
+TACTIC_LINE_GAIN_CP = 200
+
+# Validar no Stockfish todas as posições, não só as que têm conceito detectado.
+# Sem isso, um erro numa posição em que nenhum detector disparou nunca é visto, e a
+# taxa de erro global sai subestimada (o denominador conta todas as posições).
+VALIDATE_ALL_POSITIONS = True
 
 # Limiar de erro: diferença de centipawns para considerar lance ruim (piso absoluto)
 ERROR_THRESHOLD_CP = 50
